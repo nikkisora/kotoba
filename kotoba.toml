@@ -1,6 +1,8 @@
 [general]
-db_path = "kotoba.db"
-jmdict_path = "data/JMdict_e.xml"
+# db_path and jmdict_path default to ~/.local/share/kotoba/
+# Uncomment to override:
+# db_path = "/custom/path/kotoba.db"
+# jmdict_path = "/custom/path/JMdict_e.xml"
 theme = "tokyo-night"
 
 [reader]

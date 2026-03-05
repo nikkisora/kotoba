@@ -5,21 +5,38 @@ use anyhow::Result;
 pub struct TokenInfo {
     pub surface: String,
     pub base_form: String,
+    /// Reading of the base/lemma form (for vocabulary matching and dictionary lookup).
     pub reading: String,
+    /// Reading of the actual surface form (for furigana display above conjugated forms).
+    pub surface_reading: String,
     pub pos: String,
     pub conjugation_form: String,
     pub conjugation_type: String,
 }
 
 impl TokenInfo {
-    /// Returns true if this token represents punctuation, whitespace, or symbols
-    /// that should not create vocabulary entries.
+    /// Returns true if this token represents punctuation, whitespace, symbols,
+    /// numbers, or non-Japanese text that should not create vocabulary entries.
     pub fn is_trivial(&self) -> bool {
         matches!(
             self.pos.as_str(),
             "Symbol" | "Punctuation" | "Whitespace" | "BOS/EOS" | ""
         ) || self.surface.trim().is_empty()
+          || is_numeric(&self.surface)
+          || is_ascii_only(&self.surface)
     }
+}
+
+/// Check if a string is purely numeric (digits, decimal points, commas).
+fn is_numeric(s: &str) -> bool {
+    let trimmed = s.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',' || c == '０' || c == '１' || c == '２' || c == '３' || c == '４' || c == '５' || c == '６' || c == '７' || c == '８' || c == '９' || ('０'..='９').contains(&c))
+}
+
+/// Check if a string contains only ASCII characters (English text, punctuation, etc.).
+fn is_ascii_only(s: &str) -> bool {
+    let trimmed = s.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii())
 }
 
 /// Initialize a lindera tokenizer with the bundled UniDic dictionary.
@@ -59,7 +76,8 @@ pub fn tokenize_sentence(text: &str) -> Result<Vec<TokenInfo>> {
         let major_pos = get(0);
         let conj_type = get(4);
         let conj_form = get(5);
-        let reading_kata = get(6);
+        let lemma_reading_kata = get(6);   // Index 6: lemma reading (e.g. イク for 行く)
+        let surface_reading_kata = get(9); // Index 9: surface pronunciation (e.g. イッ for 行っ)
 
         // UniDic uses "orthographic_base_form" (index 10) for the written base form,
         // and "lexeme" (index 7) for the lemma. Prefer orthographic, fall back to lexeme.
@@ -74,12 +92,14 @@ pub fn tokenize_sentence(text: &str) -> Result<Vec<TokenInfo>> {
         };
 
         let pos = map_pos(major_pos);
-        let reading = katakana_to_hiragana(reading_kata);
+        let reading = katakana_to_hiragana(lemma_reading_kata);
+        let surface_reading = katakana_to_hiragana(surface_reading_kata);
 
         result.push(TokenInfo {
             surface: surface.clone(),
             base_form: base_form_raw.to_string(),
             reading: if reading == "*" { String::new() } else { reading },
+            surface_reading: if surface_reading == "*" { String::new() } else { surface_reading },
             pos: pos.to_string(),
             conjugation_form: normalize_star(conj_form),
             conjugation_type: normalize_star(conj_type),

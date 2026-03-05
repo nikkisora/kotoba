@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
+use flate2::read::GzDecoder;
 use indicatif::{ProgressBar, ProgressStyle};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::Path;
 
 /// A sense (meaning) of a dictionary entry.
@@ -34,19 +36,100 @@ impl DictEntry {
     }
 }
 
-/// Import JMdict XML file into the database.
-pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
-    // Estimate entry count for progress bar (~190k entries)
-    let file_size = std::fs::metadata(path)
-        .with_context(|| format!("Cannot read file: {}", path.display()))?
-        .len();
+const JMDICT_URL: &str = "ftp://ftp.edrdg.org/pub/Nihongo//JMdict_e.gz";
 
-    let pb = ProgressBar::new(file_size);
+/// Download JMdict_e.gz, decompress, and import into the database.
+/// This is the all-in-one setup command.
+pub fn setup_dict(conn: &Connection, data_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(data_dir)
+        .with_context(|| format!("Failed to create data directory: {}", data_dir.display()))?;
+
+    let gz_path = data_dir.join("JMdict_e.gz");
+    let xml_path = data_dir.join("JMdict_e.xml");
+
+    // Step 1: Download
+    println!("Downloading JMdict_e.gz from EDRDG...");
+    download_with_progress(JMDICT_URL, &gz_path)?;
+
+    // Step 2: Decompress
+    println!("Decompressing...");
+    decompress_gz(&gz_path, &xml_path)?;
+    println!(
+        "Decompressed to {} ({:.1} MB)",
+        xml_path.display(),
+        std::fs::metadata(&xml_path)?.len() as f64 / 1_048_576.0
+    );
+
+    // Step 3: Import
+    import_jmdict(&xml_path, conn)?;
+
+    // Cleanup: remove .gz to save space
+    let _ = std::fs::remove_file(&gz_path);
+
+    Ok(())
+}
+
+/// Download a URL to a file using curl with its native progress bar.
+fn download_with_progress(url: &str, dest: &Path) -> Result<()> {
+    use std::process::Command;
+
+    let output = Command::new("curl")
+        .args(["-L", "--progress-bar", "-o"])
+        .arg(dest.as_os_str())
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .context("Failed to run curl. Is curl installed?")?;
+
+    if !output.success() {
+        anyhow::bail!("Download failed with exit code: {:?}", output.code());
+    }
+
+    let size = std::fs::metadata(dest)?.len();
+    println!(
+        "Downloaded {:.1} MB",
+        size as f64 / 1_048_576.0,
+    );
+
+    Ok(())
+}
+
+/// Decompress a .gz file to a destination path.
+fn decompress_gz(gz_path: &Path, dest: &Path) -> Result<()> {
+    let gz_file = std::fs::File::open(gz_path)
+        .with_context(|| format!("Failed to open: {}", gz_path.display()))?;
+
+    let gz_size = gz_file.metadata()?.len();
+    let pb = ProgressBar::new(gz_size);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} bytes ({eta})")
+            .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} decompressing...")
             .unwrap()
-            .progress_chars("##-"),
+            .progress_chars("██░"),
+    );
+
+    let progress_reader = pb.wrap_read(gz_file);
+    let mut decoder = GzDecoder::new(progress_reader);
+    let mut output = std::fs::File::create(dest)
+        .with_context(|| format!("Failed to create: {}", dest.display()))?;
+    std::io::copy(&mut decoder, &mut output)?;
+
+    pb.finish_and_clear();
+    Ok(())
+}
+
+/// Import JMdict XML file into the database.
+pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
+    // ~200k entries typical for JMdict_e
+    let estimated_entries: u64 = 200_000;
+    let pb = ProgressBar::new(estimated_entries);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} entries ({eta})")
+            .unwrap()
+            .progress_chars("██░"),
     );
 
     let content = std::fs::read_to_string(path)
@@ -64,6 +147,7 @@ pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
     let mut in_sense = false;
     let mut current_sense = SenseBuilder::new();
     let mut buf_text = String::new();
+    let mut gloss_is_english = true;
 
     loop {
         match reader.read_event() {
@@ -79,6 +163,19 @@ pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
                         in_sense = true;
                         current_sense = SenseBuilder::new();
                     }
+                    "gloss" => {
+                        // Check xml:lang attribute; default (absent) = "eng"
+                        gloss_is_english = true;
+                        for attr in e.attributes().flatten() {
+                            let key = String::from_utf8_lossy(attr.key.as_ref());
+                            if key == "xml:lang" || key == "lang" {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                if val != "eng" {
+                                    gloss_is_english = false;
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -93,7 +190,7 @@ pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
                             entry_count += 1;
 
                             if entry_count % 1000 == 0 {
-                                pb.set_position(reader.buffer_position() as u64);
+                                pb.set_position(entry_count);
                             }
                         }
                     }
@@ -122,7 +219,7 @@ pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
                             builder.readings.push(buf_text.clone());
                         }
                         "gloss" => {
-                            if in_sense {
+                            if in_sense && gloss_is_english {
                                 current_sense.glosses.push(buf_text.clone());
                             }
                         }

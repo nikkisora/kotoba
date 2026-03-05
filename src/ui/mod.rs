@@ -1,3 +1,27 @@
 pub mod components;
+pub mod events;
 pub mod screens;
-// TUI render functions — implemented in Phase 2
+
+use ratatui::Frame;
+
+use crate::app::{App, Screen};
+
+/// Main render function that dispatches to the active screen.
+pub fn render(frame: &mut Frame, app: &App) {
+    match app.screen {
+        Screen::Library => screens::library::render(frame, app),
+        Screen::Reader => screens::reader::render(frame, app),
+        Screen::Review => screens::placeholder::render(frame, "Review", "SRS review mode — coming in Phase 4"),
+        Screen::Stats => screens::placeholder::render(frame, "Stats", "Statistics — coming in Phase 6"),
+    }
+
+    // Render popup overlay if any
+    if let Some(ref popup) = app.popup {
+        components::popup::render_popup(frame, app, popup);
+    }
+
+    // Render status bar message
+    if let Some((ref msg, _)) = app.message {
+        components::status_bar::render_message(frame, msg);
+    }
+}

@@ -307,12 +307,12 @@ Each card can be reviewed in one of these modes (configured per session or per c
 **Goal**: Get the Ratatui environment running with interactive Japanese text rendering.
 
 #### 2.1 TUI Framework Setup
-- [ ] Implement `ui/events.rs`:
+- [x] Implement `ui/events.rs`:
   - `EventLoop` struct wrapping a `crossterm` event stream
   - Tick rate: 60ms (for smooth UI updates and spinner animations)
   - `Event` enum: `Key(KeyEvent)`, `Tick`, `LlmResponse(LlmResult)`, `Resize(u16, u16)`
   - Spawn a background thread for `crossterm::event::read()`, forward events via `mpsc::channel`
-- [ ] Implement `app.rs` — central `App` struct:
+- [x] Implement `app.rs` — central `App` struct:
   - `screen: Screen` enum: `Library`, `Reader`, `Review`, `Stats`
   - `db: Connection` (owned rusqlite connection)
   - `config: AppConfig`
@@ -320,18 +320,18 @@ Each card can be reviewed in one of these modes (configured per session or per c
   - `review_state: Option<ReviewState>`
   - `popup: Option<PopupState>` (for overlays like detailed dictionary entry)
   - `message: Option<(String, Instant)>` (status bar messages that auto-dismiss)
-- [ ] Implement main TUI loop in `main.rs`:
+- [x] Implement main TUI loop in `main.rs`:
   - `Terminal::new(CrosstermBackend::new(stdout()))`
   - Enable raw mode, alternate screen, mouse capture
   - Loop: poll event -> `app.handle_event(event)` -> `terminal.draw(|f| ui::render(f, &app))`
   - Graceful cleanup on panic (restore terminal state)
-- [ ] Global keybindings:
+- [x] Global keybindings:
   - `q` / `Ctrl+C` — quit (with confirmation if in Reader with unsaved state)
   - `Tab` — cycle between screens (Library -> Reader -> Review -> Stats)
   - `?` — show help overlay with all keybindings for current screen
 
 #### 2.2 Reader State Machine
-- [ ] `ReaderState` struct:
+- [x] `ReaderState` struct:
   - `text_id: i64` — currently loaded text
   - `paragraphs: Vec<ParagraphData>` — pre-loaded paragraphs with their tokens
   - `sentence_index: usize` — index into flat list of all sentences
@@ -339,36 +339,36 @@ Each card can be reviewed in one of these modes (configured per session or per c
   - `sentences: Vec<SentenceData>` — flattened list: each holds `paragraph_idx`, `token_range`, `text`
   - `vocabulary_cache: HashMap<(String, String), Vocabulary>` — in-memory cache of vocabulary statuses keyed by (base_form, reading)
   - `scroll_offset: usize` — vertical scroll position for main text area
-- [ ] `SentenceData` struct: `paragraph_idx`, `start_token`, `end_token`, `tokens: Vec<TokenDisplay>`
-- [ ] `TokenDisplay` struct: `surface`, `base_form`, `reading`, `pos`, `vocabulary_status`, `is_selected`, `dict_entry: Option<ShortGloss>`
-- [ ] Load text on enter: query all paragraphs + tokens, build sentence list, lookup all vocabulary statuses, lookup JMdict short glosses for each unique base_form
+- [x] `SentenceData` struct: `paragraph_idx`, `start_token`, `end_token`, `tokens: Vec<TokenDisplay>`
+- [x] `TokenDisplay` struct: `surface`, `base_form`, `reading`, `pos`, `vocabulary_status`, `is_selected`, `dict_entry: Option<ShortGloss>`
+- [x] Load text on enter: query all paragraphs + tokens, build sentence list, lookup all vocabulary statuses, lookup JMdict short glosses for each unique base_form
 
 #### 2.3 Furigana Rendering Engine
-- [ ] Implement `ui/components/furigana.rs`:
+- [x] Implement `ui/components/furigana.rs`:
   - `render_token_with_furigana(token: &TokenDisplay, style: Style) -> (Vec<Span>, Vec<Span>)` — returns (furigana_line, kanji_line) as Ratatui `Span` pairs
   - Use `unicode_width::UnicodeWidthStr::width()` to calculate display width $W$ of the surface form
   - If surface == reading (all kana), render single line only (no furigana needed)
   - If surface contains kanji: center the reading (converted to hiragana) within $W$ cells on the line above
   - Handle edge cases: mixed kanji-kana tokens, single kanji, long readings that exceed kanji width (pad kanji with spaces instead)
-- [ ] `render_sentence_block(sentence: &SentenceData, area: Rect, buf: &mut Buffer)`:
+- [x] `render_sentence_block(sentence: &SentenceData, area: Rect, buf: &mut Buffer)`:
   - Lay out tokens left-to-right, wrapping to next line-pair (furigana + kanji) when exceeding area width
   - Each token's style is determined by its `vocabulary_status` color mapping
   - Selected word gets `bg(Color::Blue)` highlight
 
 #### 2.4 Main Reader View
-- [ ] Implement `ui/screens/reader.rs`:
+- [x] Implement `ui/screens/reader.rs`:
   - Horizontal split: 70% main text, 30% sidebar (adjustable via config)
   - Main text area: Render all paragraphs as `furigana_line + kanji_line` blocks, scrolled so current sentence is vertically centered
   - Current sentence indicator: `▶` gutter marker or distinct background color
   - Paragraph boundaries: blank line between paragraphs
   - Word coloring by vocabulary status (see color table in Domain Concepts)
-- [ ] Scroll management:
+- [x] Scroll management:
   - Calculate total rendered height of all paragraphs (accounting for furigana doubling line count)
   - Auto-scroll to keep current sentence centered (with 3-line margin from top/bottom)
   - Don't scroll if entire text fits in view
 
 #### 2.5 Sidebar Panel
-- [ ] Implement `ui/components/sidebar.rs`:
+- [x] Implement `ui/components/sidebar.rs`:
   - **Header**: Current sentence repeated as plain text (no furigana, just the raw sentence)
   - **Word list**: Each non-trivial token in the sentence displayed as:
     ```
@@ -377,7 +377,7 @@ Each card can be reviewed in one of these modes (configured per session or per c
     Format: `surface (reading) = short_gloss  [status]`
   - Currently selected word highlighted with `>>` marker and bold style
   - Scroll independently if word list exceeds sidebar height
-- [ ] Word detail popup (triggered by `Enter`):
+- [x] Word detail popup (triggered by `Enter`):
   - Modal overlay (centered, 60% width, 80% height)
   - Full JMdict entry: all kanji forms, all readings, all senses with POS tags and glosses
   - List of encountered conjugation forms with counts from `conjugation_encounters`
@@ -386,7 +386,7 @@ Each card can be reviewed in one of these modes (configured per session or per c
   - Close with `Esc` or `Enter`
 
 #### 2.6 Reader Keybindings & State Mutations
-- [ ] Keybinding implementation:
+- [x] Keybinding implementation:
   - `↑`/`k` — previous sentence (update `sentence_index`, reset `word_index` to None, re-center scroll)
   - `↓`/`j` — next sentence
   - `←`/`h` — previous word in sentence (set or decrement `word_index`)
@@ -403,10 +403,10 @@ Each card can be reviewed in one of these modes (configured per session or per c
   - `Esc` — deselect word (set `word_index` to None)
 
 #### 2.7 Verification
-- [ ] Manual test: import a sample text, open in Reader, verify furigana alignment for various token widths
-- [ ] Test: sentence navigation wraps correctly at text boundaries
-- [ ] Test: status changes persist across Reader reloads (close and reopen same text)
-- [ ] Visual check: all vocabulary status colors render correctly on both dark and light terminal backgrounds
+- [x] Manual test: import a sample text, open in Reader, verify furigana alignment for various token widths
+- [x] Test: sentence navigation wraps correctly at text boundaries
+- [x] Test: status changes persist across Reader reloads (close and reopen same text)
+- [x] Visual check: all vocabulary status colors render correctly on both dark and light terminal backgrounds
 
 ---
 

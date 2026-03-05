@@ -99,9 +99,11 @@ pub struct Token {
     pub surface: String,
     pub base_form: String,
     pub reading: String,
+    pub surface_reading: String,
     pub pos: String,
     pub conjugation_form: String,
     pub conjugation_type: String,
+    pub sentence_index: i32,
 }
 
 impl Token {
@@ -113,9 +115,11 @@ impl Token {
             surface: row.get("surface")?,
             base_form: row.get("base_form")?,
             reading: row.get("reading")?,
+            surface_reading: row.get("surface_reading").unwrap_or_default(),
             pos: row.get("pos")?,
             conjugation_form: row.get("conjugation_form")?,
             conjugation_type: row.get("conjugation_type")?,
+            sentence_index: row.get("sentence_index").unwrap_or(0),
         })
     }
 }
@@ -240,14 +244,16 @@ pub fn insert_token(
     surface: &str,
     base_form: &str,
     reading: &str,
+    surface_reading: &str,
     pos: &str,
     conjugation_form: &str,
     conjugation_type: &str,
+    sentence_index: i32,
 ) -> Result<i64> {
     conn.execute(
-        "INSERT INTO tokens (paragraph_id, position, surface, base_form, reading, pos, conjugation_form, conjugation_type)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![paragraph_id, position, surface, base_form, reading, pos, conjugation_form, conjugation_type],
+        "INSERT INTO tokens (paragraph_id, position, surface, base_form, reading, surface_reading, pos, conjugation_form, conjugation_type, sentence_index)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![paragraph_id, position, surface, base_form, reading, surface_reading, pos, conjugation_form, conjugation_type, sentence_index],
     )?;
     Ok(conn.last_insert_rowid())
 }

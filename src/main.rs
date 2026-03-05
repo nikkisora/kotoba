@@ -7,7 +7,20 @@ mod ui;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use crossterm::ExecutableCommand;
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
+use std::io::stdout;
 use std::path::PathBuf;
+use std::time::Duration;
+
+use app::{App, PopupState, Screen};
+use db::models::VocabularyStatus;
+use ui::events::{Event, EventLoop};
 
 #[derive(Parser)]
 #[command(name = "kotoba", version, about = "Terminal-based Japanese language learning app")]
@@ -42,6 +55,8 @@ enum Commands {
         /// Path to JMdict_e.xml file
         path: PathBuf,
     },
+    /// Download and set up the JMdict dictionary automatically
+    SetupDict,
     /// Launch the TUI reader
     Run,
 }
@@ -50,7 +65,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let cfg = config::AppConfig::load(cli.config.as_deref())?;
-    let conn = db::connection::open_or_create(cfg.db_path())?;
+    let conn = db::connection::open_or_create(&cfg.db_path())?;
     db::schema::run_migrations(&conn)?;
 
     match cli.command {
@@ -94,10 +109,338 @@ fn main() -> Result<()> {
         Commands::ImportDict { path } => {
             core::dictionary::import_jmdict(&path, &conn)?;
         }
+        Commands::SetupDict => {
+            let db_path = cfg.db_path();
+            let data_dir = db_path.parent().unwrap_or(std::path::Path::new("."));
+            core::dictionary::setup_dict(&conn, data_dir)?;
+        }
         Commands::Run => {
-            println!("TUI mode not yet implemented (Phase 2)");
+            drop(conn); // Close CLI connection; TUI opens its own
+            run_tui(cfg)?;
         }
     }
 
     Ok(())
+}
+
+/// Run the TUI application.
+fn run_tui(config: config::AppConfig) -> Result<()> {
+    // Setup terminal
+    enable_raw_mode()?;
+    stdout().execute(EnterAlternateScreen)?;
+    stdout().execute(crossterm::event::EnableMouseCapture)?;
+
+    let backend = CrosstermBackend::new(stdout());
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+
+    // Ensure terminal is restored on panic
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = stdout().execute(LeaveAlternateScreen);
+        let _ = stdout().execute(crossterm::event::DisableMouseCapture);
+        default_panic(info);
+    }));
+
+    let mut app = App::new(config);
+
+    // Load library on start
+    if let Err(e) = app.refresh_library() {
+        app.set_message(format!("Error loading library: {}", e));
+    }
+
+    let events = EventLoop::new(Duration::from_millis(60));
+
+    // Main event loop
+    loop {
+        terminal.draw(|frame| ui::render(frame, &app))?;
+
+        match events.next()? {
+            Event::Key(key) => {
+                handle_key_event(&mut app, key);
+            }
+            Event::Tick => {
+                app.tick();
+            }
+            Event::Resize(_, _) => {}
+            Event::Mouse(_) => {}
+        }
+
+        if app.should_quit {
+            break;
+        }
+    }
+
+    // Restore terminal
+    disable_raw_mode()?;
+    stdout().execute(LeaveAlternateScreen)?;
+    stdout().execute(crossterm::event::DisableMouseCapture)?;
+    terminal.show_cursor()?;
+
+    Ok(())
+}
+
+/// Handle a key event, dispatching based on current state.
+fn handle_key_event(app: &mut App, key: KeyEvent) {
+    // Handle popups first
+    if let Some(ref popup) = app.popup.clone() {
+        handle_popup_key(app, key, &popup);
+        return;
+    }
+
+    // Global keybindings
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.should_quit = true;
+            return;
+        }
+        KeyCode::Char('q') => {
+            if app.screen == Screen::Reader && app.reader_state.is_some() {
+                app.popup = Some(PopupState::QuitConfirm);
+            } else {
+                app.should_quit = true;
+            }
+            return;
+        }
+        KeyCode::Tab => {
+            app.screen = app.screen.next();
+            if app.screen == Screen::Library {
+                let _ = app.refresh_library();
+            }
+            return;
+        }
+        KeyCode::Char('?') => {
+            app.popup = Some(PopupState::Help);
+            return;
+        }
+        _ => {}
+    }
+
+    match app.screen {
+        Screen::Library => handle_library_key(app, key),
+        Screen::Reader => handle_reader_key(app, key),
+        Screen::Review => {}
+        Screen::Stats => {}
+    }
+}
+
+fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
+    match popup {
+        PopupState::WordDetail { .. } => match key.code {
+            KeyCode::Esc | KeyCode::Enter => app.popup = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(PopupState::WordDetail { ref mut scroll, .. }) = app.popup {
+                    *scroll = scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(PopupState::WordDetail { ref mut scroll, .. }) = app.popup {
+                    *scroll += 1;
+                }
+            }
+            _ => {}
+        },
+        PopupState::Help => match key.code {
+            KeyCode::Esc | KeyCode::Char('?') => app.popup = None,
+            _ => {}
+        },
+        PopupState::NoteEditor { .. } => match key.code {
+            KeyCode::Esc => app.popup = None,
+            KeyCode::Enter => {
+                if let Err(e) = app.save_note() {
+                    app.set_message(format!("Error saving note: {}", e));
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(PopupState::NoteEditor { ref mut text, .. }) = app.popup {
+                    text.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(PopupState::NoteEditor { ref mut text, .. }) = app.popup {
+                    text.push(c);
+                }
+            }
+            _ => {}
+        },
+        PopupState::QuitConfirm => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => app.should_quit = true,
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.popup = None,
+            _ => {}
+        },
+    }
+}
+
+fn handle_library_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut lib) = app.library_state {
+                lib.selected = lib.selected.saturating_sub(1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut lib) = app.library_state {
+                let max = lib.texts.len().saturating_sub(1);
+                lib.selected = (lib.selected + 1).min(max);
+            }
+        }
+        KeyCode::Enter => {
+            let text_id = app
+                .library_state
+                .as_ref()
+                .and_then(|lib| lib.texts.get(lib.selected))
+                .map(|t| t.id);
+            if let Some(id) = text_id {
+                if let Err(e) = app.load_text(id) {
+                    app.set_message(format!("Error loading text: {}", e));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_reader_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        // Sentence navigation
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut state) = app.reader_state {
+                if state.sentence_index > 0 {
+                    state.sentence_index -= 1;
+                    state.word_index = None;
+                    state.sidebar_scroll = 0;
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut state) = app.reader_state {
+                if state.sentence_index + 1 < state.sentences.len() {
+                    state.sentence_index += 1;
+                    state.word_index = None;
+                    state.sidebar_scroll = 0;
+                }
+            }
+        }
+
+        // Word navigation
+        KeyCode::Left | KeyCode::Char('h') => {
+            if let Some(ref mut state) = app.reader_state {
+                if state.sentences.is_empty() {
+                    return;
+                }
+                let sentence = &state.sentences[state.sentence_index];
+                match state.word_index {
+                    None => {
+                        state.word_index = sentence.tokens.iter().rposition(|t| !t.is_trivial);
+                    }
+                    Some(i) => {
+                        let prev = if i > 0 {
+                            sentence.tokens[..i].iter().rposition(|t| !t.is_trivial)
+                        } else {
+                            None
+                        };
+                        match prev {
+                            Some(p) => state.word_index = Some(p),
+                            None => {
+                                // First word — go to previous sentence, select last word
+                                if state.sentence_index > 0 {
+                                    state.sentence_index -= 1;
+                                    state.sidebar_scroll = 0;
+                                    let prev_sentence = &state.sentences[state.sentence_index];
+                                    state.word_index = prev_sentence.tokens.iter().rposition(|t| !t.is_trivial);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if let Some(ref mut state) = app.reader_state {
+                if state.sentences.is_empty() {
+                    return;
+                }
+                let sentence = &state.sentences[state.sentence_index];
+                match state.word_index {
+                    None => {
+                        state.word_index = sentence.tokens.iter().position(|t| !t.is_trivial);
+                    }
+                    Some(i) => {
+                        let next = sentence.tokens[i + 1..]
+                            .iter()
+                            .position(|t| !t.is_trivial)
+                            .map(|p| p + i + 1);
+                        match next {
+                            Some(n) => state.word_index = Some(n),
+                            None => {
+                                // Last word — advance to next sentence, select first word
+                                if state.sentence_index + 1 < state.sentences.len() {
+                                    state.sentence_index += 1;
+                                    state.sidebar_scroll = 0;
+                                    let next_sentence = &state.sentences[state.sentence_index];
+                                    state.word_index = next_sentence.tokens.iter().position(|t| !t.is_trivial);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Vocabulary status
+        KeyCode::Char('1') => {
+            if let Err(e) = app.set_word_status(VocabularyStatus::Learning1) {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+        KeyCode::Char('2') => {
+            if let Err(e) = app.set_word_status(VocabularyStatus::Learning2) {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+        KeyCode::Char('3') => {
+            if let Err(e) = app.set_word_status(VocabularyStatus::Learning3) {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+        KeyCode::Char('4') => {
+            if let Err(e) = app.set_word_status(VocabularyStatus::Learning4) {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+        KeyCode::Char('5') => {
+            if let Err(e) = app.set_word_status(VocabularyStatus::Known) {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+        KeyCode::Char('i') => {
+            if let Err(e) = app.set_word_status(VocabularyStatus::Ignored) {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+
+        // Word detail
+        KeyCode::Enter => {
+            if let Err(e) = app.open_word_detail() {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+
+        // Note editor
+        KeyCode::Char('n') => {
+            if let Err(e) = app.open_note_editor() {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+
+        // Deselect word
+        KeyCode::Esc => {
+            if let Some(ref mut state) = app.reader_state {
+                state.word_index = None;
+            }
+        }
+
+        _ => {}
+    }
 }

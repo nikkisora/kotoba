@@ -68,7 +68,7 @@ fn import_text_inner(
         let sentences = tokenizer::split_sentences(para_text);
         let mut token_position = 0i32;
 
-        for sentence in &sentences {
+        for (sent_idx, sentence) in sentences.iter().enumerate() {
             let tokens = tokenizer::tokenize_sentence(sentence)?;
 
             for token_info in &tokens {
@@ -79,9 +79,11 @@ fn import_text_inner(
                     &token_info.surface,
                     &token_info.base_form,
                     &token_info.reading,
+                    &token_info.surface_reading,
                     &token_info.pos,
                     &token_info.conjugation_form,
                     &token_info.conjugation_type,
+                    sent_idx as i32,
                 )?;
                 token_position += 1;
                 total_tokens += 1;
@@ -95,12 +97,30 @@ fn import_text_inner(
                         &token_info.pos,
                     )?;
 
-                    // Check if this is a new vocabulary entry (status == New means it was just created)
+                    // Auto-ignore particles, auxiliaries, conjunctions, prefixes, suffixes,
+                    // numbers, and ASCII-only tokens (English text, punctuation)
+                    let is_numeric = token_info.surface.trim().chars().all(|c| {
+                        c.is_ascii_digit() || c == '.' || c == ',' || ('０'..='９').contains(&c)
+                    }) && !token_info.surface.trim().is_empty();
+                    let is_ascii = !token_info.surface.trim().is_empty()
+                        && token_info.surface.trim().chars().all(|c| c.is_ascii());
+                    let auto_ignore = matches!(
+                        token_info.pos.as_str(),
+                        "Particle" | "Auxiliary" | "Conjunction" | "Prefix" | "Suffix"
+                    ) || is_numeric
+                      || is_ascii;
+                    if auto_ignore {
+                        // Only set to Ignored if still New (don't override user choices)
+                        if let Ok(Some(vocab)) = models::get_vocabulary_by_id(conn, vocab_id) {
+                            if vocab.status == models::VocabularyStatus::New {
+                                models::update_vocabulary_status(conn, vocab_id, models::VocabularyStatus::Ignored)?;
+                            }
+                        }
+                    }
+
+                    // Check if this is a new vocabulary entry
                     if let Ok(Some(vocab)) = models::get_vocabulary_by_id(conn, vocab_id) {
                         if vocab.status == models::VocabularyStatus::New {
-                            // Count only truly new (first time seen) — but upsert doesn't
-                            // distinguish, so we count based on whether the updated_at == first_seen_at
-                            // For simplicity, we increment for each unique vocab_id we see
                             new_vocab += 1;
                         }
                     }

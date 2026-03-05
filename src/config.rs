@@ -15,8 +15,10 @@ pub struct AppConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneralConfig {
-    pub db_path: PathBuf,
-    pub jmdict_path: PathBuf,
+    /// Path to the SQLite database. Defaults to XDG data dir (~/.local/share/kotoba/kotoba.db).
+    pub db_path: Option<PathBuf>,
+    /// Path to JMdict XML file. Defaults to XDG data dir (~/.local/share/kotoba/JMdict_e.xml).
+    pub jmdict_path: Option<PathBuf>,
     #[serde(default = "default_theme")]
     pub theme: String,
 }
@@ -88,50 +90,65 @@ impl Default for LlmConfig {
 }
 
 impl AppConfig {
-    /// Resolved DB path for convenience
-    pub fn db_path(&self) -> &Path {
-        &self.general.db_path
+    /// Default data directory: ~/.local/share/kotoba (or platform equivalent).
+    fn default_data_dir() -> PathBuf {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("kotoba")
+    }
+
+    /// Resolved DB path — uses config override or defaults to XDG data dir.
+    pub fn db_path(&self) -> PathBuf {
+        self.general.db_path.clone().unwrap_or_else(|| Self::default_data_dir().join("kotoba.db"))
+    }
+
+    /// Resolved JMdict path — uses config override or defaults to XDG data dir.
+    pub fn jmdict_path(&self) -> PathBuf {
+        self.general.jmdict_path.clone().unwrap_or_else(|| Self::default_data_dir().join("JMdict_e.xml"))
+    }
+
+    /// Ensure the data directory exists (creates it if needed).
+    pub fn ensure_data_dir(&self) -> Result<()> {
+        let db_dir = self.db_path().parent().map(|p| p.to_path_buf());
+        if let Some(dir) = db_dir {
+            if !dir.exists() {
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("Failed to create data directory: {}", dir.display()))?;
+            }
+        }
+        Ok(())
     }
 
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        // Try explicit path, then XDG config, then default
-        if let Some(p) = path {
+        // Try explicit path, then XDG config, then local, then defaults
+        let config: Self = if let Some(p) = path {
             let content = std::fs::read_to_string(p)
                 .with_context(|| format!("Failed to read config file: {}", p.display()))?;
-            return toml::from_str(&content).context("Failed to parse config file");
-        }
-
-        // Try XDG config path
-        if let Some(config_dir) = dirs::config_dir() {
-            let cfg_path = config_dir.join("kotoba").join("kotoba.toml");
-            if cfg_path.exists() {
-                let content = std::fs::read_to_string(&cfg_path)?;
-                return toml::from_str(&content).context("Failed to parse config file");
+            toml::from_str(&content).context("Failed to parse config file")?
+        } else if let Some(cfg_path) = dirs::config_dir().map(|d| d.join("kotoba").join("kotoba.toml")).filter(|p| p.exists()) {
+            let content = std::fs::read_to_string(&cfg_path)?;
+            toml::from_str(&content).context("Failed to parse config file")?
+        } else {
+            let local = Path::new("kotoba.toml");
+            if local.exists() {
+                let content = std::fs::read_to_string(local)?;
+                toml::from_str(&content).context("Failed to parse config file")?
+            } else {
+                Self::default()
             }
-        }
+        };
 
-        // Try local kotoba.toml
-        let local = Path::new("kotoba.toml");
-        if local.exists() {
-            let content = std::fs::read_to_string(local)?;
-            return toml::from_str(&content).context("Failed to parse config file");
-        }
-
-        // Return defaults
-        Ok(Self::default())
+        config.ensure_data_dir()?;
+        Ok(config)
     }
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("kotoba");
-
         Self {
             general: GeneralConfig {
-                db_path: data_dir.join("kotoba.db"),
-                jmdict_path: data_dir.join("JMdict_e.xml"),
+                db_path: None,
+                jmdict_path: None,
                 theme: default_theme(),
             },
             reader: ReaderConfig::default(),

@@ -2693,6 +2693,7 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs 5.0.1",
+ "flate2",
  "fsrs",
  "indicatif",
  "lindera",

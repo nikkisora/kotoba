@@ -129,6 +129,11 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
         );
         CREATE INDEX IF NOT EXISTS idx_jmdict_readings ON jmdict_readings(reading_element);
     "#),
+
+    (8, "Add surface_reading and sentence_index to tokens", r#"
+        ALTER TABLE tokens ADD COLUMN surface_reading TEXT NOT NULL DEFAULT '';
+        ALTER TABLE tokens ADD COLUMN sentence_index INTEGER NOT NULL DEFAULT 0;
+    "#),
 ];
 
 /// Run all pending migrations.
@@ -173,6 +178,6 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 }
