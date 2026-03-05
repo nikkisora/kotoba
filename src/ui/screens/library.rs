@@ -6,6 +6,19 @@ use ratatui::Frame;
 
 use crate::app::App;
 
+/// Source type display icon/label.
+fn source_icon(source_type: &str) -> &str {
+    match source_type {
+        "text" => "📄",
+        "clipboard" => "📋",
+        "web" => "🌐",
+        "syosetsu" => "📖",
+        "subtitle" => "🎬",
+        "epub" => "📚",
+        _ => "📝",
+    }
+}
+
 /// Render the library screen showing imported texts.
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.size();
@@ -53,20 +66,23 @@ pub fn render(frame: &mut Frame, app: &App) {
                     } else {
                         Style::default()
                     };
+                    let icon = source_icon(&t.source_type);
                     ListItem::new(Line::from(vec![
                         Span::styled(marker, style),
+                        Span::raw(format!("{} ", icon)),
                         Span::styled(&t.title, style),
                         Span::styled(
-                            format!("  [{}]  {}", t.source_type, t.created_at),
+                            format!("  [{}]  {}", t.source_type, &t.created_at[..10.min(t.created_at.len())]),
                             Style::default().fg(Color::DarkGray),
                         ),
                     ]))
                 })
                 .collect();
 
+            let count_label = format!(" Imported Texts ({}) ", texts.len());
             let list = List::new(items).block(
                 Block::default()
-                    .title(" Imported Texts ")
+                    .title(count_label)
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Blue)),
             );
@@ -80,8 +96,13 @@ pub fn render(frame: &mut Frame, app: &App) {
                     Style::default().fg(Color::DarkGray),
                 )),
                 Line::from(""),
-                Line::from("Import a text with: kotoba import <file>"),
-                Line::from("Then launch: kotoba run"),
+                Line::from("Import a text:"),
+                Line::from("  kotoba import <file>          — text, .srt, .ass, .epub"),
+                Line::from("  kotoba import --clipboard     — from clipboard"),
+                Line::from("  kotoba import --url <URL>     — from web page"),
+                Line::from("  kotoba syosetsu <ncode>       — from Syosetsu novel"),
+                Line::from(""),
+                Line::from("Or press [i] here to import from clipboard or URL."),
             ])
             .block(
                 Block::default()
@@ -96,7 +117,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Status bar
     let status = Line::from(vec![
         Span::styled(
-            " ↑↓:navigate  Enter:open  Tab:screens  q:quit  ?:help ",
+            " ↑↓:navigate  Enter:open  d:delete  i:import  /:search  Tab:screens  q:quit  ?:help ",
             Style::default().fg(Color::DarkGray),
         ),
     ]);

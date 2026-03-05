@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -21,7 +22,7 @@ pub fn import_file(path: &Path, conn: &Connection) -> Result<i64> {
 }
 
 /// Import text content into the database with full tokenization pipeline.
-/// Returns the text_id.
+/// Returns the text_id. Shows a progress bar in the terminal.
 pub fn import_text(
     title: &str,
     content: &str,
@@ -29,10 +30,48 @@ pub fn import_text(
     source_url: Option<&str>,
     conn: &Connection,
 ) -> Result<i64> {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.cyan} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} paragraphs — {msg}")
+            .unwrap()
+            .progress_chars("█▉▊▋▌▍▎▏  "),
+    );
+    pb.set_message(format!("Importing \"{}\"...", title));
+
+    let result = import_text_with_progress(title, content, source_type, source_url, conn, Some(&pb));
+
+    match &result {
+        Ok(_) => pb.finish_with_message(format!("\"{}\" imported successfully", title)),
+        Err(e) => pb.finish_with_message(format!("Import failed: {}", e)),
+    }
+
+    result
+}
+
+/// Import text without any progress bar (for use from TUI or tests).
+pub fn import_text_quiet(
+    title: &str,
+    content: &str,
+    source_type: &str,
+    source_url: Option<&str>,
+    conn: &Connection,
+) -> Result<i64> {
+    import_text_with_progress(title, content, source_type, source_url, conn, None)
+}
+
+/// Core import function with optional progress bar.
+pub fn import_text_with_progress(
+    title: &str,
+    content: &str,
+    source_type: &str,
+    source_url: Option<&str>,
+    conn: &Connection,
+    progress: Option<&ProgressBar>,
+) -> Result<i64> {
     // Wrap entire import in a transaction
     conn.execute_batch("BEGIN TRANSACTION;")?;
 
-    let result = import_text_inner(title, content, source_type, source_url, conn);
+    let result = import_text_inner(title, content, source_type, source_url, conn, progress);
 
     match result {
         Ok(text_id) => {
@@ -52,6 +91,7 @@ fn import_text_inner(
     source_type: &str,
     source_url: Option<&str>,
     conn: &Connection,
+    progress: Option<&ProgressBar>,
 ) -> Result<i64> {
     let text_id = models::insert_text(conn, title, content, source_type, source_url)?;
 
@@ -59,6 +99,11 @@ fn import_text_inner(
     let mut total_tokens = 0usize;
     let mut new_vocab = 0usize;
     let mut para_count = 0usize;
+
+    if let Some(pb) = progress {
+        pb.set_length(paragraphs.len() as u64);
+        pb.set_position(0);
+    }
 
     for (para_idx, para_text) in paragraphs.iter().enumerate() {
         let para_id = models::insert_paragraph(conn, text_id, para_idx as i32, para_text)?;
@@ -138,12 +183,22 @@ fn import_text_inner(
                 }
             }
         }
+
+        if let Some(pb) = progress {
+            pb.set_position((para_idx + 1) as u64);
+            pb.set_message(format!(
+                "\"{}\" — {} tokens, {} new vocab",
+                title, total_tokens, new_vocab
+            ));
+        }
     }
 
-    println!(
-        "  Paragraphs: {}, Tokens: {}, Vocabulary entries: {}",
-        para_count, total_tokens, new_vocab
-    );
+    if progress.is_none() {
+        println!(
+            "  Paragraphs: {}, Tokens: {}, Vocabulary entries: {}",
+            para_count, total_tokens, new_vocab
+        );
+    }
 
     Ok(text_id)
 }
@@ -163,7 +218,7 @@ mod tests {
     fn test_import_simple_text() {
         let conn = setup();
 
-        let text_id = import_text(
+        let text_id = import_text_quiet(
             "Test",
             "吾輩は猫である。名前はまだ無い。",
             "text",
@@ -196,7 +251,7 @@ mod tests {
         let conn = setup();
 
         let content = "最初の段落。\n\n二番目の段落。";
-        let text_id = import_text("Multi", content, "text", None, &conn).unwrap();
+        let text_id = import_text_quiet("Multi", content, "text", None, &conn).unwrap();
 
         let paragraphs = models::list_paragraphs_by_text(&conn, text_id).unwrap();
         assert_eq!(paragraphs.len(), 2, "Should have 2 paragraphs");
@@ -207,7 +262,7 @@ mod tests {
         let conn = setup();
 
         // Import twice with same word
-        import_text("Test1", "猫は猫である。", "text", None, &conn).unwrap();
+        import_text_quiet("Test1", "猫は猫である。", "text", None, &conn).unwrap();
 
         // "猫" should appear only once in vocabulary
         let count: i32 = conn

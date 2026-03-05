@@ -339,6 +339,192 @@ pub fn upsert_conjugation_encounter(
     Ok(conn.last_insert_rowid())
 }
 
+// ─── Web Source Models ───────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct WebSource {
+    pub id: i64,
+    pub source_type: String,
+    pub external_id: String,
+    pub title: String,
+    pub metadata_json: String,
+    pub last_synced: String,
+}
+
+impl WebSource {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            source_type: row.get("source_type")?,
+            external_id: row.get("external_id")?,
+            title: row.get("title")?,
+            metadata_json: row.get("metadata_json")?,
+            last_synced: row.get("last_synced")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WebSourceChapter {
+    pub id: i64,
+    pub web_source_id: i64,
+    pub chapter_number: i32,
+    pub title: String,
+    pub text_id: Option<i64>,
+    pub word_count: i32,
+    pub created_at: String,
+}
+
+impl WebSourceChapter {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            web_source_id: row.get("web_source_id")?,
+            chapter_number: row.get("chapter_number")?,
+            title: row.get("title")?,
+            text_id: row.get("text_id")?,
+            word_count: row.get("word_count")?,
+            created_at: row.get("created_at")?,
+        })
+    }
+}
+
+/// Per-text statistics for library display.
+#[derive(Debug, Clone, Default)]
+pub struct TextStats {
+    pub total_tokens: usize,
+    pub unique_vocab: usize,
+    pub known_count: usize,
+    pub learning_count: usize,
+    pub new_count: usize,
+}
+
+// ─── Additional CRUD Operations ──────────────────────────────────────
+
+/// Delete a text and all its cascaded data (paragraphs, tokens).
+pub fn delete_text(conn: &Connection, text_id: i64) -> Result<()> {
+    conn.execute("DELETE FROM texts WHERE id = ?1", params![text_id])?;
+    Ok(())
+}
+
+/// List all texts, ordered by created_at descending.
+pub fn list_all_texts(conn: &Connection) -> Result<Vec<Text>> {
+    let mut stmt = conn.prepare("SELECT * FROM texts ORDER BY created_at DESC")?;
+    let rows = stmt.query_map([], Text::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Get per-text vocabulary statistics.
+pub fn get_text_stats(conn: &Connection, text_id: i64) -> Result<TextStats> {
+    // Total non-trivial tokens
+    let total_tokens: usize = conn.query_row(
+        "SELECT COUNT(*) FROM tokens t
+         JOIN paragraphs p ON t.paragraph_id = p.id
+         WHERE p.text_id = ?1 AND t.pos NOT IN ('Symbol','Punctuation','Whitespace','BOS/EOS','','Particle','Auxiliary','Conjunction','Prefix','Suffix')",
+        params![text_id],
+        |r| r.get(0),
+    ).unwrap_or(0);
+
+    // Unique vocabulary with status breakdown
+    let mut stmt = conn.prepare(
+        "SELECT v.status, COUNT(DISTINCT v.id) FROM vocabulary v
+         JOIN tokens t ON t.base_form = v.base_form AND t.reading = v.reading
+         JOIN paragraphs p ON t.paragraph_id = p.id
+         WHERE p.text_id = ?1
+         GROUP BY v.status"
+    )?;
+    let rows = stmt.query_map(params![text_id], |row| {
+        Ok((row.get::<_, i32>(0)?, row.get::<_, usize>(1)?))
+    })?;
+
+    let mut stats = TextStats { total_tokens, ..Default::default() };
+    for row in rows.flatten() {
+        let (status_val, count) = row;
+        stats.unique_vocab += count;
+        match VocabularyStatus::from_i32(status_val) {
+            VocabularyStatus::Known => stats.known_count += count,
+            VocabularyStatus::Learning1 | VocabularyStatus::Learning2
+            | VocabularyStatus::Learning3 | VocabularyStatus::Learning4 => stats.learning_count += count,
+            VocabularyStatus::New => stats.new_count += count,
+            _ => {}
+        }
+    }
+
+    Ok(stats)
+}
+
+/// Upsert a web source. Returns the id.
+pub fn upsert_web_source(
+    conn: &Connection,
+    source_type: &str,
+    external_id: &str,
+    title: &str,
+    metadata_json: &str,
+) -> Result<i64> {
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM web_sources WHERE source_type = ?1 AND external_id = ?2",
+            params![source_type, external_id],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(id) = existing {
+        conn.execute(
+            "UPDATE web_sources SET title = ?1, metadata_json = ?2, last_synced = datetime('now') WHERE id = ?3",
+            params![title, metadata_json, id],
+        )?;
+        return Ok(id);
+    }
+
+    conn.execute(
+        "INSERT INTO web_sources (source_type, external_id, title, metadata_json) VALUES (?1, ?2, ?3, ?4)",
+        params![source_type, external_id, title, metadata_json],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Insert a web source chapter.
+pub fn insert_web_source_chapter(
+    conn: &Connection,
+    web_source_id: i64,
+    chapter_number: i32,
+    title: &str,
+    text_id: Option<i64>,
+    word_count: i32,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO web_source_chapters (web_source_id, chapter_number, title, text_id, word_count)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![web_source_id, chapter_number, title, text_id, word_count],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// List chapters for a web source.
+pub fn list_chapters_by_source(conn: &Connection, web_source_id: i64) -> Result<Vec<WebSourceChapter>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM web_source_chapters WHERE web_source_id = ?1 ORDER BY chapter_number"
+    )?;
+    let rows = stmt.query_map(params![web_source_id], WebSourceChapter::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Search texts by title (case-insensitive LIKE).
+pub fn search_texts(conn: &Connection, query: &str) -> Result<Vec<Text>> {
+    let pattern = format!("%{}%", query);
+    let mut stmt = conn.prepare("SELECT * FROM texts WHERE title LIKE ?1 ORDER BY created_at DESC")?;
+    let rows = stmt.query_map(params![pattern], Text::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// List texts filtered by source_type.
+pub fn list_texts_by_source_type(conn: &Connection, source_type: &str) -> Result<Vec<Text>> {
+    let mut stmt = conn.prepare("SELECT * FROM texts WHERE source_type = ?1 ORDER BY created_at DESC")?;
+    let rows = stmt.query_map(params![source_type], Text::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

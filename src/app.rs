@@ -48,6 +48,21 @@ pub enum PopupState {
     },
     /// Quit confirmation.
     QuitConfirm,
+    /// Delete text confirmation.
+    DeleteConfirm {
+        text_id: i64,
+        title: String,
+    },
+    /// Import sub-menu (clipboard / URL / file).
+    ImportMenu,
+    /// URL text input for web import.
+    UrlInput {
+        text: String,
+    },
+    /// Search/filter input for library.
+    SearchInput {
+        text: String,
+    },
 }
 
 /// A token as displayed in the reader.
@@ -417,6 +432,39 @@ impl App {
             vocabulary_id: vocab_id,
             text: existing_notes,
         });
+        Ok(())
+    }
+
+    /// Delete a text and refresh the library.
+    pub fn delete_text(&mut self, text_id: i64) -> Result<()> {
+        let conn = self.open_db()?;
+        models::delete_text(&conn, text_id)?;
+        self.refresh_library()?;
+        Ok(())
+    }
+
+    /// Import from clipboard (TUI context).
+    pub fn import_clipboard(&mut self) -> Result<String> {
+        let conn = self.open_db()?;
+        let (_text_id, title) = crate::import::clipboard::import_clipboard_quiet(&conn)?;
+        self.refresh_library()?;
+        Ok(title)
+    }
+
+    /// Import from URL (TUI context).
+    pub fn import_url(&mut self, url: &str) -> Result<String> {
+        let conn = self.open_db()?;
+        let (_text_id, title) = crate::import::web::import_url_quiet(url, &conn)?;
+        self.refresh_library()?;
+        Ok(title)
+    }
+
+    /// Search the library by title.
+    pub fn search_library(&mut self, query: &str) -> Result<()> {
+        let conn = self.open_db()?;
+        let texts = models::search_texts(&conn, query)?;
+        let selected = 0;
+        self.library_state = Some(LibraryState { texts, selected });
         Ok(())
     }
 

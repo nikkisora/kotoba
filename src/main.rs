@@ -35,10 +35,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Import a text file for reading
+    /// Import content for reading (auto-detects format: .txt, .srt, .ass, .epub)
     Import {
-        /// Path to the text file to import
-        file: PathBuf,
+        /// Path to the file to import
+        #[arg(group = "source")]
+        file: Option<PathBuf>,
+
+        /// Import from system clipboard
+        #[arg(long, group = "source")]
+        clipboard: bool,
+
+        /// Import from a URL (fetches and extracts article text)
+        #[arg(long, group = "source")]
+        url: Option<String>,
     },
     /// Tokenize a Japanese text string
     Tokenize {
@@ -57,6 +66,15 @@ enum Commands {
     },
     /// Download and set up the JMdict dictionary automatically
     SetupDict,
+    /// Import a Syosetsu (小説家になろう) novel chapter
+    Syosetsu {
+        /// Novel URL or ncode (e.g. n1234ab)
+        ncode: String,
+
+        /// Chapter number to import (omit to see chapter list)
+        #[arg(short, long)]
+        chapter: Option<usize>,
+    },
     /// Launch the TUI reader
     Run,
 }
@@ -69,9 +87,41 @@ fn main() -> Result<()> {
     db::schema::run_migrations(&conn)?;
 
     match cli.command {
-        Commands::Import { file } => {
-            let text_id = import::text::import_file(&file, &conn)?;
-            println!("Imported text with id: {text_id}");
+        Commands::Import { file, clipboard, url } => {
+            if clipboard {
+                let text_id = import::clipboard::import_clipboard(&conn)?;
+                println!("Imported clipboard text with id: {text_id}");
+            } else if let Some(url) = url {
+                let text_id = import::web::import_url(&url, &conn)?;
+                println!("Imported web content with id: {text_id}");
+            } else if let Some(file) = file {
+                // Auto-detect format by extension
+                let ext = file.extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                match ext.as_str() {
+                    "srt" | "ass" | "ssa" => {
+                        let text_id = import::subtitle::import_subtitle(&file, &conn)?;
+                        println!("Imported subtitle with id: {text_id}");
+                    }
+                    "epub" => {
+                        let chapters = import::epub::import_epub(&file, &conn)?;
+                        println!("Imported {} chapters:", chapters.len());
+                        for (id, title) in &chapters {
+                            println!("  [{}] {}", id, title);
+                        }
+                    }
+                    _ => {
+                        // Default: plain text
+                        let text_id = import::text::import_file(&file, &conn)?;
+                        println!("Imported text with id: {text_id}");
+                    }
+                }
+            } else {
+                anyhow::bail!("Specify a file, --clipboard, or --url to import");
+            }
         }
         Commands::Tokenize { text } => {
             let tokens = core::tokenizer::tokenize_sentence(&text)?;
@@ -113,6 +163,27 @@ fn main() -> Result<()> {
             let db_path = cfg.db_path();
             let data_dir = db_path.parent().unwrap_or(std::path::Path::new("."));
             core::dictionary::setup_dict(&conn, data_dir)?;
+        }
+        Commands::Syosetsu { ncode, chapter } => {
+            let ncode = import::syosetsu::parse_ncode(&ncode)?;
+
+            if let Some(ch) = chapter {
+                let text_id = import::syosetsu::import_chapter(&ncode, ch, &conn)?;
+                println!("Imported chapter {} with id: {text_id}", ch);
+            } else {
+                // Show novel info and chapter list
+                println!("Fetching novel info for {}...", ncode);
+                let novel = import::syosetsu::fetch_novel_info(&ncode)?;
+                println!("Title: {}", novel.title);
+                println!("Author: {}", novel.author);
+                println!("Chapters: {}", novel.total_chapters);
+                println!();
+                for ch in &novel.chapters {
+                    println!("  {:>4}. {}", ch.number, ch.title);
+                }
+                println!();
+                println!("Import a chapter with: kotoba syosetsu {} --chapter <N>", ncode);
+            }
         }
         Commands::Run => {
             drop(conn); // Close CLI connection; TUI opens its own
@@ -269,6 +340,85 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.popup = None,
             _ => {}
         },
+        PopupState::DeleteConfirm { .. } => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(PopupState::DeleteConfirm { text_id, ref title }) = app.popup {
+                    let title = title.clone();
+                    if let Err(e) = app.delete_text(text_id) {
+                        app.set_message(format!("Error deleting: {}", e));
+                    } else {
+                        app.set_message(format!("Deleted \"{}\"", title));
+                    }
+                }
+                app.popup = None;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.popup = None,
+            _ => {}
+        },
+        PopupState::ImportMenu => match key.code {
+            KeyCode::Esc => app.popup = None,
+            KeyCode::Char('c') => {
+                app.popup = None;
+                match app.import_clipboard() {
+                    Ok(title) => app.set_message(format!("Imported: {}", title)),
+                    Err(e) => app.set_message(format!("Clipboard import failed: {}", e)),
+                }
+            }
+            KeyCode::Char('u') => {
+                app.popup = Some(PopupState::UrlInput { text: String::new() });
+            }
+            _ => {}
+        },
+        PopupState::UrlInput { .. } => match key.code {
+            KeyCode::Esc => app.popup = None,
+            KeyCode::Enter => {
+                if let Some(PopupState::UrlInput { ref text }) = app.popup {
+                    let url = text.clone();
+                    app.popup = None;
+                    match app.import_url(&url) {
+                        Ok(title) => app.set_message(format!("Imported: {}", title)),
+                        Err(e) => app.set_message(format!("URL import failed: {}", e)),
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(PopupState::UrlInput { ref mut text }) = app.popup {
+                    text.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(PopupState::UrlInput { ref mut text }) = app.popup {
+                    text.push(c);
+                }
+            }
+            _ => {}
+        },
+        PopupState::SearchInput { .. } => match key.code {
+            KeyCode::Esc => {
+                app.popup = None;
+                let _ = app.refresh_library(); // Reset to full list
+            }
+            KeyCode::Enter => {
+                if let Some(PopupState::SearchInput { ref text }) = app.popup {
+                    let query = text.clone();
+                    app.popup = None;
+                    if let Err(e) = app.search_library(&query) {
+                        app.set_message(format!("Search error: {}", e));
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(PopupState::SearchInput { ref mut text }) = app.popup {
+                    text.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(PopupState::SearchInput { ref mut text }) = app.popup {
+                    text.push(c);
+                }
+            }
+            _ => {}
+        },
     }
 }
 
@@ -296,6 +446,25 @@ fn handle_library_key(app: &mut App, key: KeyEvent) {
                     app.set_message(format!("Error loading text: {}", e));
                 }
             }
+        }
+        KeyCode::Char('d') => {
+            // Delete selected text (with confirmation)
+            if let Some(ref lib) = app.library_state {
+                if let Some(text) = lib.texts.get(lib.selected) {
+                    app.popup = Some(PopupState::DeleteConfirm {
+                        text_id: text.id,
+                        title: text.title.clone(),
+                    });
+                }
+            }
+        }
+        KeyCode::Char('i') => {
+            // Import sub-menu
+            app.popup = Some(PopupState::ImportMenu);
+        }
+        KeyCode::Char('/') => {
+            // Search
+            app.popup = Some(PopupState::SearchInput { text: String::new() });
         }
         _ => {}
     }

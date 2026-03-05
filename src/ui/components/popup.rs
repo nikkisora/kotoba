@@ -150,6 +150,9 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from(Span::styled("Library:", Style::default().add_modifier(Modifier::BOLD))),
                 Line::from("  ↑/↓         — Navigate texts"),
                 Line::from("  Enter       — Open text in Reader"),
+                Line::from("  d           — Delete selected text"),
+                Line::from("  i           — Import (clipboard/URL)"),
+                Line::from("  /           — Search texts by title"),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Press Esc or ? to close",
@@ -212,6 +215,137 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 .title(" Confirm ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Red));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+
+        PopupState::DeleteConfirm { title, .. } => {
+            let area = centered_rect(50, 20, frame.size());
+            frame.render_widget(Clear, area);
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Delete this text?",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    title.as_str(),
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from(""),
+                Line::from("This will remove the text and all its tokens."),
+                Line::from(""),
+                Line::from("  y — Yes, delete"),
+                Line::from("  n — No, cancel"),
+            ];
+
+            let block = Block::default()
+                .title(" Confirm Delete ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+
+        PopupState::ImportMenu => {
+            let area = centered_rect(40, 25, frame.size());
+            frame.render_widget(Clear, area);
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Import Source:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from("  c — Clipboard"),
+                Line::from("  u — URL (web page)"),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "For files, EPUBs, subtitles, and Syosetsu:",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    "use the CLI: kotoba import <file>",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Esc to cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let block = Block::default()
+                .title(" Import ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+
+        PopupState::UrlInput { text } => {
+            let area = centered_rect(60, 20, frame.size());
+            frame.render_widget(Clear, area);
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Enter URL to import:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("▎{}_", text),
+                    Style::default().fg(Color::Cyan),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Enter to import • Esc to cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let block = Block::default()
+                .title(" URL Import ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+
+        PopupState::SearchInput { text } => {
+            let area = centered_rect(50, 15, frame.size());
+            frame.render_widget(Clear, area);
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Search texts by title:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("▎{}_", text),
+                    Style::default().fg(Color::Cyan),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Enter to search • Esc to cancel/reset",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let block = Block::default()
+                .title(" Search ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);

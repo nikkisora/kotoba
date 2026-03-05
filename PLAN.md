@@ -415,68 +415,71 @@ Each card can be reviewed in one of these modes (configured per session or per c
 **Goal**: Support multiple import sources beyond plain text files.
 
 #### 3.1 Clipboard Import
-- [ ] Add `arboard` crate for cross-platform clipboard access
-- [ ] CLI command `kotoba import --clipboard` or TUI action (keybinding in Library screen)
-- [ ] Flow: read clipboard text -> confirm with user (show first 200 chars preview) -> run through same import pipeline as text files
-- [ ] Auto-generate title from first line or first N characters
+- [x] Add `arboard` crate for cross-platform clipboard access
+- [x] CLI command `kotoba import --clipboard` or TUI action (keybinding in Library screen)
+- [x] Flow: read clipboard text -> confirm with user (show first 200 chars preview) -> run through same import pipeline as text files
+- [x] Auto-generate title from first line or first N characters
 
 #### 3.2 Web Import (Generic)
-- [ ] Implement `import/web.rs`:
+- [x] Implement `import/web.rs`:
   - `import_url(url: &str, conn: &Connection) -> Result<i64>`
-  - Fetch HTML via `reqwest::get(url).await`
-  - Extract article content via `readability` crate (port of Mozilla Readability)
+  - Fetch HTML via `reqwest::blocking::get(url)`
+  - Extract article content via `scraper` crate (readability-style heuristic extraction)
   - Strip remaining HTML tags, normalize whitespace
   - Store `source_url` and `source_type = "web"` in `texts` table
   - Run through standard tokenization pipeline
-- [ ] CLI command `kotoba import --url "https://..."`
-- [ ] Handle errors gracefully: connection failures, non-HTML content, readability extraction failures
+- [x] CLI command `kotoba import --url "https://..."`
+- [x] Handle errors gracefully: connection failures, non-HTML content, readability extraction failures
 
 #### 3.3 Syosetsu (小説家になろう) Custom Source
-- [ ] Implement `import/syosetsu.rs`:
+- [x] Implement `import/syosetsu.rs`:
   - `SyosetsuNovel` struct: `ncode`, `title`, `author`, `total_chapters`, `chapters: Vec<SyosetsuChapter>`
   - `SyosetsuChapter`: `number`, `title`, `text_id` (nullable, only set if imported), `word_count`
-  - Fetch novel metadata from `https://ncode.syosetsu.com/novelview/infotop/ncode/{ncode}/`
+  - Fetch novel metadata from Syosetsu table of contents page
   - Fetch chapter list from the novel's table of contents page
   - `import_chapter(ncode: &str, chapter: usize, conn: &Connection) -> Result<i64>` — fetch single chapter HTML, extract text, import
-- [ ] TUI screen: `ui/screens/syosetsu.rs`:
-  - Input field for novel URL or ncode
-  - Display novel info: title, author, chapter count
-  - Chapter list with import status: `[✓] Chapter 1: 第一話` vs `[ ] Chapter 2: 第二話`
-  - Show reading progress per chapter (% of sentences read)
-  - Keybinding to import selected chapter, then jump to Reader
-- [ ] Store novel metadata in a new table `web_sources`: `id`, `source_type`, `external_id`, `title`, `metadata_json`, `last_synced`
-- [ ] DB migration 007: Create `web_sources` and `web_source_chapters` tables
+- [x] CLI command `kotoba syosetsu <ncode> --chapter <N>` for importing chapters
+- [x] Store novel metadata in `web_sources` table: `id`, `source_type`, `external_id`, `title`, `metadata_json`, `last_synced`
+- [x] DB migration 009: Create `web_sources` and `web_source_chapters` tables
+- [ ] TUI screen: `ui/screens/syosetsu.rs` (deferred — CLI-based workflow functional)
 
 #### 3.4 Subtitle Import (.srt / .ass)
-- [ ] Implement `import/subtitle.rs`:
+- [x] Implement `import/subtitle.rs`:
   - Parse `.srt` format: extract timed text entries, strip timing info, concatenate into paragraphs (group by scene/gap)
   - Parse `.ass`/`.ssa` format: extract `Dialogue` lines, strip style tags `{\...}`, extract text
   - Each subtitle block becomes a paragraph; individual lines become sentences
   - Store `source_type = "subtitle"` in `texts` table
-- [ ] CLI command `kotoba import <file.srt>`
+- [x] CLI command `kotoba import <file.srt>` (auto-detected by extension)
 
 #### 3.5 EPUB Import
-- [ ] Add `epub` or `zip` crate for EPUB unarchiving
-- [ ] Implement `import/epub.rs`:
+- [x] Add `zip` crate for EPUB unarchiving
+- [x] Implement `import/epub.rs`:
   - Open EPUB (it's a ZIP archive), parse `content.opf` for spine order
   - Extract XHTML chapter files in spine order
   - Strip HTML tags, extract text content per chapter
   - Each chapter becomes a separate `texts` entry (linked by a shared `source_url` = EPUB file path)
-  - Or: import as single text with chapter boundaries as paragraph separators
-- [ ] CLI command `kotoba import <book.epub>`
+- [x] CLI command `kotoba import <book.epub>` (auto-detected by extension)
+- [x] Progress bar for multi-chapter EPUB imports
 
 #### 3.6 Library Screen
-- [ ] Implement `ui/screens/library.rs`:
-  - List all imported texts with: title, source type icon, word count, date imported
-  - Per-text stats: total words, unique vocabulary, % known, % learning, new words remaining
-  - Sort by: date imported (default), title, completion %
-  - Filter by source type (text, web, syosetsu, subtitle, epub)
+- [x] Implement `ui/screens/library.rs`:
+  - List all imported texts with: title, source type icon, date imported
   - Keybindings:
     - `Enter` — open selected text in Reader
-    - `d` — delete text (with confirmation)
-    - `i` — import new text (sub-menu: file / clipboard / URL / syosetsu)
+    - `d` — delete text (with confirmation popup)
+    - `i` — import new text (sub-menu: clipboard / URL)
     - `/` — search/filter texts by title
-  - Syosetsu novels shown as expandable groups (novel title -> chapter list)
+  - Per-text stats queries available (total words, unique vocab, known/learning/new counts)
+  - Search texts by title with live filtering
+- [ ] Per-text stats display in library list (deferred — queries implemented in models)
+- [ ] Sort by: date imported (default), title, completion %
+- [ ] Filter by source type (text, web, syosetsu, subtitle, epub)
+- [ ] Syosetsu novels shown as expandable groups
+
+#### 3.7 Import Progress Bar (Additional)
+- [x] All imports show an `indicatif` progress bar with paragraph count, token count, and new vocab count
+- [x] EPUB imports show chapter-level progress
+- [x] Quiet import variants available for TUI context (no terminal output)
 
 ---
 

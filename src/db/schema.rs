@@ -134,6 +134,29 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
         ALTER TABLE tokens ADD COLUMN surface_reading TEXT NOT NULL DEFAULT '';
         ALTER TABLE tokens ADD COLUMN sentence_index INTEGER NOT NULL DEFAULT 0;
     "#),
+
+    (9, "Create web_sources and web_source_chapters tables", r#"
+        CREATE TABLE IF NOT EXISTS web_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            last_synced TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_web_sources_type_extid ON web_sources(source_type, external_id);
+
+        CREATE TABLE IF NOT EXISTS web_source_chapters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            web_source_id INTEGER NOT NULL REFERENCES web_sources(id) ON DELETE CASCADE,
+            chapter_number INTEGER NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            text_id INTEGER REFERENCES texts(id) ON DELETE SET NULL,
+            word_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_wsc_source_id ON web_source_chapters(web_source_id);
+    "#),
 ];
 
 /// Run all pending migrations.
@@ -178,6 +201,6 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 }

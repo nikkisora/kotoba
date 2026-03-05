@@ -12,7 +12,7 @@ unicode-width = "0.1"
 
 # Core / Async
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
@@ -33,3 +33,7 @@ chrono = { version = "0.4", features = ["serde"] }
 indicatif = "0.17"
 dirs = "5.0"
 flate2 = "1.0"                # Gzip decompression for JMdict download
+arboard = "3.4"               # Cross-platform clipboard access
+scraper = "0.21"              # HTML parsing for web import
+zip = "2.1"                   # EPUB unarchiving (EPUB = ZIP)
+regex = "1"                   # Regex for subtitle parsing
