@@ -5,13 +5,15 @@ use std::time::Instant;
 
 use crate::config::AppConfig;
 use crate::core::dictionary::{self, DictEntry};
-use crate::db::models::{self, Vocabulary, VocabularyStatus};
+use crate::db::models::{self, TextStats, Vocabulary, VocabularyStatus};
+use crate::import::syosetsu::SyosetsuNovel;
 
 /// Which screen is currently active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Library,
     Reader,
+    Syosetsu,
     Review,
     Stats,
 }
@@ -20,7 +22,8 @@ impl Screen {
     pub fn next(self) -> Self {
         match self {
             Screen::Library => Screen::Reader,
-            Screen::Reader => Screen::Review,
+            Screen::Reader => Screen::Syosetsu,
+            Screen::Syosetsu => Screen::Review,
             Screen::Review => Screen::Stats,
             Screen::Stats => Screen::Library,
         }
@@ -117,10 +120,50 @@ pub struct ReaderState {
     pub sidebar_scroll: usize,
 }
 
+/// How the library list is sorted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibrarySort {
+    DateDesc,
+    DateAsc,
+    TitleAsc,
+    Completion,
+}
+
+impl LibrarySort {
+    pub fn next(self) -> Self {
+        match self {
+            Self::DateDesc => Self::DateAsc,
+            Self::DateAsc => Self::TitleAsc,
+            Self::TitleAsc => Self::Completion,
+            Self::Completion => Self::DateDesc,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DateDesc => "Date ↓",
+            Self::DateAsc => "Date ↑",
+            Self::TitleAsc => "Title A-Z",
+            Self::Completion => "Completion %",
+        }
+    }
+}
+
 /// Library screen state.
 pub struct LibraryState {
     pub texts: Vec<models::Text>,
+    pub stats: HashMap<i64, TextStats>,
     pub selected: usize,
+    pub sort: LibrarySort,
+    pub filter_source: Option<String>,
+    /// All unique source types present in the DB.
+    pub source_types: Vec<String>,
+}
+
+/// Syosetsu novel browser state.
+pub struct SyosetsuState {
+    pub novel: SyosetsuNovel,
+    pub selected_chapter: usize,
 }
 
 /// Central application state.
@@ -129,6 +172,7 @@ pub struct App {
     pub config: AppConfig,
     pub reader_state: Option<ReaderState>,
     pub library_state: Option<LibraryState>,
+    pub syosetsu_state: Option<SyosetsuState>,
     pub popup: Option<PopupState>,
     pub message: Option<(String, Instant)>,
     pub should_quit: bool,
@@ -143,6 +187,7 @@ impl App {
             config,
             reader_state: None,
             library_state: None,
+            syosetsu_state: None,
             popup: None,
             message: None,
             should_quit: false,
@@ -167,15 +212,100 @@ impl App {
         }
     }
 
-    /// Refresh the library text list.
+    /// Refresh the library text list with stats, sorting, and filtering.
     pub fn refresh_library(&mut self) -> Result<()> {
         let conn = self.open_db()?;
-        let mut stmt = conn.prepare("SELECT * FROM texts ORDER BY created_at DESC")?;
-        let rows = stmt.query_map([], models::Text::from_row)?;
-        let texts: Vec<models::Text> = rows.filter_map(|r| r.ok()).collect();
-        let selected = self.library_state.as_ref().map(|s| s.selected.min(texts.len().saturating_sub(1))).unwrap_or(0);
-        self.library_state = Some(LibraryState { texts, selected });
+
+        // Preserve current sort/filter from existing state
+        let (sort, filter_source) = self.library_state.as_ref()
+            .map(|s| (s.sort, s.filter_source.clone()))
+            .unwrap_or((LibrarySort::DateDesc, None));
+
+        // Get all texts (or filtered)
+        let mut texts = if let Some(ref src) = filter_source {
+            models::list_texts_by_source_type(&conn, src)?
+        } else {
+            models::list_all_texts(&conn)?
+        };
+
+        // Collect unique source types
+        let source_types = {
+            let all = models::list_all_texts(&conn)?;
+            let mut types: Vec<String> = all.iter().map(|t| t.source_type.clone()).collect();
+            types.sort();
+            types.dedup();
+            types
+        };
+
+        // Load per-text stats
+        let mut stats = HashMap::new();
+        for t in &texts {
+            if let Ok(s) = models::get_text_stats(&conn, t.id) {
+                stats.insert(t.id, s);
+            }
+        }
+
+        // Apply sort
+        match sort {
+            LibrarySort::DateDesc => texts.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
+            LibrarySort::DateAsc => texts.sort_by(|a, b| a.created_at.cmp(&b.created_at)),
+            LibrarySort::TitleAsc => texts.sort_by(|a, b| a.title.cmp(&b.title)),
+            LibrarySort::Completion => {
+                texts.sort_by(|a, b| {
+                    let pct_a = stats.get(&a.id).map(|s| {
+                        if s.unique_vocab == 0 { 0.0 } else { s.known_count as f64 / s.unique_vocab as f64 }
+                    }).unwrap_or(0.0);
+                    let pct_b = stats.get(&b.id).map(|s| {
+                        if s.unique_vocab == 0 { 0.0 } else { s.known_count as f64 / s.unique_vocab as f64 }
+                    }).unwrap_or(0.0);
+                    pct_b.partial_cmp(&pct_a).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+        }
+
+        let selected = self.library_state.as_ref()
+            .map(|s| s.selected.min(texts.len().saturating_sub(1)))
+            .unwrap_or(0);
+
+        self.library_state = Some(LibraryState {
+            texts,
+            stats,
+            selected,
+            sort,
+            filter_source,
+            source_types,
+        });
         Ok(())
+    }
+
+    /// Cycle the library sort mode.
+    pub fn cycle_library_sort(&mut self) -> Result<()> {
+        if let Some(ref mut lib) = self.library_state {
+            lib.sort = lib.sort.next();
+        }
+        self.refresh_library()
+    }
+
+    /// Cycle the library source type filter.
+    pub fn cycle_library_filter(&mut self) -> Result<()> {
+        if let Some(ref mut lib) = self.library_state {
+            let types = &lib.source_types;
+            if types.is_empty() {
+                return Ok(());
+            }
+            lib.filter_source = match &lib.filter_source {
+                None => Some(types[0].clone()),
+                Some(current) => {
+                    let idx = types.iter().position(|t| t == current).unwrap_or(0);
+                    if idx + 1 >= types.len() {
+                        None // Cycle back to "all"
+                    } else {
+                        Some(types[idx + 1].clone())
+                    }
+                }
+            };
+        }
+        self.refresh_library()
     }
 
     /// Load a text into the reader by text_id.
@@ -463,8 +593,23 @@ impl App {
     pub fn search_library(&mut self, query: &str) -> Result<()> {
         let conn = self.open_db()?;
         let texts = models::search_texts(&conn, query)?;
-        let selected = 0;
-        self.library_state = Some(LibraryState { texts, selected });
+        let mut stats = HashMap::new();
+        for t in &texts {
+            if let Ok(s) = models::get_text_stats(&conn, t.id) {
+                stats.insert(t.id, s);
+            }
+        }
+        let source_types = self.library_state.as_ref()
+            .map(|s| s.source_types.clone())
+            .unwrap_or_default();
+        self.library_state = Some(LibraryState {
+            texts,
+            stats,
+            selected: 0,
+            sort: LibrarySort::DateDesc,
+            filter_source: None,
+            source_types,
+        });
         Ok(())
     }
 

@@ -291,6 +291,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
     match app.screen {
         Screen::Library => handle_library_key(app, key),
         Screen::Reader => handle_reader_key(app, key),
+        Screen::Syosetsu => handle_syosetsu_key(app, key),
         Screen::Review => {}
         Screen::Stats => {}
     }
@@ -465,6 +466,80 @@ fn handle_library_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('/') => {
             // Search
             app.popup = Some(PopupState::SearchInput { text: String::new() });
+        }
+        KeyCode::Char('s') => {
+            // Cycle sort mode
+            if let Err(e) = app.cycle_library_sort() {
+                app.set_message(format!("Sort error: {}", e));
+            }
+        }
+        KeyCode::Char('f') => {
+            // Cycle source type filter
+            if let Err(e) = app.cycle_library_filter() {
+                app.set_message(format!("Filter error: {}", e));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_syosetsu_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut state) = app.syosetsu_state {
+                state.selected_chapter = state.selected_chapter.saturating_sub(1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut state) = app.syosetsu_state {
+                let max = state.novel.chapters.len().saturating_sub(1);
+                state.selected_chapter = (state.selected_chapter + 1).min(max);
+            }
+        }
+        KeyCode::Enter => {
+            // Import selected chapter and open in reader
+            let info = app.syosetsu_state.as_ref().map(|s| {
+                let ch = &s.novel.chapters[s.selected_chapter];
+                (s.novel.ncode.clone(), ch.number, ch.text_id)
+            });
+            if let Some((ncode, chapter_num, existing_text_id)) = info {
+                if let Some(text_id) = existing_text_id {
+                    // Already imported — just open it
+                    if let Err(e) = app.load_text(text_id) {
+                        app.set_message(format!("Error loading: {}", e));
+                    }
+                } else {
+                    // Import the chapter
+                    app.set_message(format!("Importing chapter {}...", chapter_num));
+                    let conn = match app.open_db() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            app.set_message(format!("DB error: {}", e));
+                            return;
+                        }
+                    };
+                    match crate::import::syosetsu::import_chapter_quiet(&ncode, chapter_num, &conn) {
+                        Ok((text_id, title)) => {
+                            // Update the chapter's text_id
+                            if let Some(ref mut state) = app.syosetsu_state {
+                                state.novel.chapters[state.selected_chapter].text_id = Some(text_id);
+                            }
+                            app.set_message(format!("Imported: {}", title));
+                            // Open in reader
+                            if let Err(e) = app.load_text(text_id) {
+                                app.set_message(format!("Error loading: {}", e));
+                            }
+                        }
+                        Err(e) => {
+                            app.set_message(format!("Import failed: {}", e));
+                        }
+                    }
+                }
+            }
+        }
+        KeyCode::Esc => {
+            app.screen = Screen::Library;
+            let _ = app.refresh_library();
         }
         _ => {}
     }

@@ -30,6 +30,14 @@ pub fn render(frame: &mut Frame, app: &App) {
     ])
     .split(area);
 
+    let lib = app.library_state.as_ref();
+    let texts = lib.map(|l| &l.texts);
+    let selected = lib.map(|l| l.selected).unwrap_or(0);
+    let sort_label = lib.map(|l| l.sort.label()).unwrap_or("Date ↓");
+    let filter_label = lib
+        .and_then(|l| l.filter_source.as_deref())
+        .unwrap_or("all");
+
     // Title bar
     let title = Line::from(vec![
         Span::styled(
@@ -40,6 +48,16 @@ pub fn render(frame: &mut Frame, app: &App) {
         ),
         Span::raw(" — Library"),
         Span::raw("  "),
+        Span::styled(
+            format!("sort:{}", sort_label),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("filter:{}", filter_label),
+            Style::default().fg(Color::Green),
+        ),
+        Span::raw("  "),
         Span::styled("[?]help", Style::default().fg(Color::DarkGray)),
     ]);
     frame.render_widget(
@@ -48,12 +66,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     );
 
     // Content
-    let lib = app.library_state.as_ref();
-    let texts = lib.map(|l| &l.texts);
-    let selected = lib.map(|l| l.selected).unwrap_or(0);
-
     match texts {
         Some(texts) if !texts.is_empty() => {
+            let stats_map = lib.map(|l| &l.stats);
+
             let items: Vec<ListItem> = texts
                 .iter()
                 .enumerate()
@@ -67,6 +83,23 @@ pub fn render(frame: &mut Frame, app: &App) {
                         Style::default()
                     };
                     let icon = source_icon(&t.source_type);
+
+                    // Build stats string
+                    let stats_str = stats_map
+                        .and_then(|m| m.get(&t.id))
+                        .map(|s| {
+                            let pct = if s.unique_vocab == 0 {
+                                0
+                            } else {
+                                (s.known_count * 100) / s.unique_vocab
+                            };
+                            format!(
+                                "  {}w  K:{} L:{} N:{}  {}%",
+                                s.total_tokens, s.known_count, s.learning_count, s.new_count, pct
+                            )
+                        })
+                        .unwrap_or_default();
+
                     ListItem::new(Line::from(vec![
                         Span::styled(marker, style),
                         Span::raw(format!("{} ", icon)),
@@ -74,6 +107,10 @@ pub fn render(frame: &mut Frame, app: &App) {
                         Span::styled(
                             format!("  [{}]  {}", t.source_type, &t.created_at[..10.min(t.created_at.len())]),
                             Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::styled(
+                            stats_str,
+                            Style::default().fg(Color::Rgb(100, 140, 180)),
                         ),
                     ]))
                 })
@@ -117,7 +154,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Status bar
     let status = Line::from(vec![
         Span::styled(
-            " ↑↓:navigate  Enter:open  d:delete  i:import  /:search  Tab:screens  q:quit  ?:help ",
+            " ↑↓:navigate  Enter:open  d:delete  i:import  /:search  s:sort  f:filter  Tab:screens  q:quit ",
             Style::default().fg(Color::DarkGray),
         ),
     ]);

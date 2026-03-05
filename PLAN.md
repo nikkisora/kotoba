@@ -441,7 +441,7 @@ Each card can be reviewed in one of these modes (configured per session or per c
 - [x] CLI command `kotoba syosetsu <ncode> --chapter <N>` for importing chapters
 - [x] Store novel metadata in `web_sources` table: `id`, `source_type`, `external_id`, `title`, `metadata_json`, `last_synced`
 - [x] DB migration 009: Create `web_sources` and `web_source_chapters` tables
-- [ ] TUI screen: `ui/screens/syosetsu.rs` (deferred — CLI-based workflow functional)
+- [x] TUI screen: `ui/screens/syosetsu.rs` — novel info display, chapter list with import status, navigate and import/open chapters
 
 #### 3.4 Subtitle Import (.srt / .ass)
 - [x] Implement `import/subtitle.rs`:
@@ -471,10 +471,10 @@ Each card can be reviewed in one of these modes (configured per session or per c
     - `/` — search/filter texts by title
   - Per-text stats queries available (total words, unique vocab, known/learning/new counts)
   - Search texts by title with live filtering
-- [ ] Per-text stats display in library list (deferred — queries implemented in models)
-- [ ] Sort by: date imported (default), title, completion %
-- [ ] Filter by source type (text, web, syosetsu, subtitle, epub)
-- [ ] Syosetsu novels shown as expandable groups
+- [x] Per-text stats display in library list (word count, known/learning/new counts, completion %)
+- [x] Sort by: date (desc/asc), title A-Z, completion % — cycle with `s` key
+- [x] Filter by source type (text, web, syosetsu, subtitle, epub) — cycle with `f` key
+- [ ] Syosetsu novels shown as expandable groups (partially done — dedicated Syosetsu screen accessible via Tab)
 
 #### 3.7 Import Progress Bar (Additional)
 - [x] All imports show an `indicatif` progress bar with paragraph count, token count, and new vocab count
