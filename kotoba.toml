@@ -1,0 +1,19 @@
+[general]
+db_path = "kotoba.db"
+jmdict_path = "data/JMdict_e.xml"
+theme = "tokyo-night"
+
+[reader]
+sidebar_width = 30
+furigana = true
+
+[srs]
+default_answer_mode = "meaning_recall"
+new_cards_per_day = 20
+max_reviews_per_session = 0
+
+[llm]
+endpoint = "https://api.openai.com/v1"
+api_key = ""
+model = "gpt-4o"
+max_tokens = 2048

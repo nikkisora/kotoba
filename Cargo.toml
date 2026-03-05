@@ -1,0 +1,34 @@
+[package]
+name = "kotoba"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# TUI / CLI
+ratatui = "0.26"
+crossterm = "0.27"
+clap = { version = "4.5", features = ["derive"] }
+unicode-width = "0.1"
+
+# Core / Async
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Data / DB
+rusqlite = { version = "0.31", features = ["bundled"] }
+quick-xml = "0.31"
+
+# Domain specific
+lindera = { version = "2.2", features = ["lindera-unidic", "embed-unidic"] }
+fsrs = "5.2"
+strsim = "0.11"
+
+# Utilities
+anyhow = "1.0"
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+indicatif = "0.17"
+dirs = "5.0"

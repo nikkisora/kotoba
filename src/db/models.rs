@@ -1,0 +1,385 @@
+use anyhow::Result;
+use rusqlite::{params, Connection, Row};
+use serde::{Deserialize, Serialize};
+
+// ─── Enums ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(i32)]
+pub enum VocabularyStatus {
+    Ignored = -1,
+    New = 0,
+    Learning1 = 1,
+    Learning2 = 2,
+    Learning3 = 3,
+    Learning4 = 4,
+    Known = 5,
+}
+
+impl VocabularyStatus {
+    pub fn from_i32(v: i32) -> Self {
+        match v {
+            -1 => Self::Ignored,
+            0 => Self::New,
+            1 => Self::Learning1,
+            2 => Self::Learning2,
+            3 => Self::Learning3,
+            4 => Self::Learning4,
+            5 => Self::Known,
+            _ => Self::New,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CardType {
+    Word,
+    Sentence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AnswerMode {
+    MeaningRecall,
+    ReadingRecall,
+    TypedReading,
+    SentenceCloze,
+}
+
+// ─── Models ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct Text {
+    pub id: i64,
+    pub title: String,
+    pub source_url: Option<String>,
+    pub source_type: String,
+    pub content: String,
+    pub language: String,
+    pub created_at: String,
+}
+
+impl Text {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            title: row.get("title")?,
+            source_url: row.get("source_url")?,
+            source_type: row.get("source_type")?,
+            content: row.get("content")?,
+            language: row.get("language")?,
+            created_at: row.get("created_at")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Paragraph {
+    pub id: i64,
+    pub text_id: i64,
+    pub position: i32,
+    pub content: String,
+}
+
+impl Paragraph {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            text_id: row.get("text_id")?,
+            position: row.get("position")?,
+            content: row.get("content")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Token {
+    pub id: i64,
+    pub paragraph_id: i64,
+    pub position: i32,
+    pub surface: String,
+    pub base_form: String,
+    pub reading: String,
+    pub pos: String,
+    pub conjugation_form: String,
+    pub conjugation_type: String,
+}
+
+impl Token {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            paragraph_id: row.get("paragraph_id")?,
+            position: row.get("position")?,
+            surface: row.get("surface")?,
+            base_form: row.get("base_form")?,
+            reading: row.get("reading")?,
+            pos: row.get("pos")?,
+            conjugation_form: row.get("conjugation_form")?,
+            conjugation_type: row.get("conjugation_type")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Vocabulary {
+    pub id: i64,
+    pub base_form: String,
+    pub reading: String,
+    pub pos: String,
+    pub status: VocabularyStatus,
+    pub notes: Option<String>,
+    pub first_seen_at: String,
+    pub updated_at: String,
+}
+
+impl Vocabulary {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        let status_val: i32 = row.get("status")?;
+        Ok(Self {
+            id: row.get("id")?,
+            base_form: row.get("base_form")?,
+            reading: row.get("reading")?,
+            pos: row.get("pos")?,
+            status: VocabularyStatus::from_i32(status_val),
+            notes: row.get("notes")?,
+            first_seen_at: row.get("first_seen_at")?,
+            updated_at: row.get("updated_at")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConjugationEncounter {
+    pub id: i64,
+    pub vocabulary_id: i64,
+    pub surface: String,
+    pub conjugation_form: String,
+    pub conjugation_type: String,
+    pub encounter_count: i32,
+    pub status: i32,
+    pub first_seen: String,
+    pub updated: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SrsCard {
+    pub id: i64,
+    pub vocabulary_id: Option<i64>,
+    pub conjugation_id: Option<i64>,
+    pub card_type: String,
+    pub answer_mode: String,
+    pub due_date: String,
+    pub stability: f64,
+    pub difficulty: f64,
+    pub reps: i32,
+    pub lapses: i32,
+    pub state: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SrsReview {
+    pub id: i64,
+    pub card_id: i64,
+    pub reviewed_at: String,
+    pub rating: i32,
+    pub elapsed_ms: i64,
+    pub typed_answer: Option<String>,
+    pub answer_correct: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmCacheEntry {
+    pub id: i64,
+    pub request_type: String,
+    pub request_hash: String,
+    pub request_body: String,
+    pub response: String,
+    pub model: String,
+    pub tokens_used: i64,
+    pub created_at: String,
+}
+
+// ─── CRUD Operations ─────────────────────────────────────────────────
+
+/// Insert a new text and return its id.
+pub fn insert_text(conn: &Connection, title: &str, content: &str, source_type: &str, source_url: Option<&str>) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO texts (title, content, source_type, source_url) VALUES (?1, ?2, ?3, ?4)",
+        params![title, content, source_type, source_url],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn get_text_by_id(conn: &Connection, id: i64) -> Result<Option<Text>> {
+    let mut stmt = conn.prepare("SELECT * FROM texts WHERE id = ?1")?;
+    let mut rows = stmt.query_map(params![id], Text::from_row)?;
+    Ok(rows.next().transpose()?)
+}
+
+/// Insert a paragraph and return its id.
+pub fn insert_paragraph(conn: &Connection, text_id: i64, position: i32, content: &str) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO paragraphs (text_id, position, content) VALUES (?1, ?2, ?3)",
+        params![text_id, position, content],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn list_paragraphs_by_text(conn: &Connection, text_id: i64) -> Result<Vec<Paragraph>> {
+    let mut stmt = conn.prepare("SELECT * FROM paragraphs WHERE text_id = ?1 ORDER BY position")?;
+    let rows = stmt.query_map(params![text_id], Paragraph::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Insert a token and return its id.
+pub fn insert_token(
+    conn: &Connection,
+    paragraph_id: i64,
+    position: i32,
+    surface: &str,
+    base_form: &str,
+    reading: &str,
+    pos: &str,
+    conjugation_form: &str,
+    conjugation_type: &str,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO tokens (paragraph_id, position, surface, base_form, reading, pos, conjugation_form, conjugation_type)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![paragraph_id, position, surface, base_form, reading, pos, conjugation_form, conjugation_type],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn list_tokens_by_paragraph(conn: &Connection, paragraph_id: i64) -> Result<Vec<Token>> {
+    let mut stmt = conn.prepare("SELECT * FROM tokens WHERE paragraph_id = ?1 ORDER BY position")?;
+    let rows = stmt.query_map(params![paragraph_id], Token::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Upsert vocabulary: insert if not exists, leave status unchanged if exists.
+/// Returns the vocabulary id.
+pub fn upsert_vocabulary(conn: &Connection, base_form: &str, reading: &str, pos: &str) -> Result<i64> {
+    // Try to find existing
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM vocabulary WHERE base_form = ?1 AND reading = ?2",
+            params![base_form, reading],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+
+    conn.execute(
+        "INSERT INTO vocabulary (base_form, reading, pos) VALUES (?1, ?2, ?3)",
+        params![base_form, reading, pos],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn get_vocabulary_by_id(conn: &Connection, id: i64) -> Result<Option<Vocabulary>> {
+    let mut stmt = conn.prepare("SELECT * FROM vocabulary WHERE id = ?1")?;
+    let mut rows = stmt.query_map(params![id], Vocabulary::from_row)?;
+    Ok(rows.next().transpose()?)
+}
+
+pub fn update_vocabulary_status(conn: &Connection, id: i64, status: VocabularyStatus) -> Result<()> {
+    conn.execute(
+        "UPDATE vocabulary SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
+        params![status as i32, id],
+    )?;
+    Ok(())
+}
+
+pub fn list_vocabulary_by_status(conn: &Connection, status: VocabularyStatus) -> Result<Vec<Vocabulary>> {
+    let mut stmt = conn.prepare("SELECT * FROM vocabulary WHERE status = ?1 ORDER BY base_form")?;
+    let rows = stmt.query_map(params![status as i32], Vocabulary::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Upsert conjugation encounter: increment count if exists, insert if not.
+pub fn upsert_conjugation_encounter(
+    conn: &Connection,
+    vocabulary_id: i64,
+    surface: &str,
+    conjugation_form: &str,
+    conjugation_type: &str,
+) -> Result<i64> {
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM conjugation_encounters WHERE vocabulary_id = ?1 AND surface = ?2",
+            params![vocabulary_id, surface],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(id) = existing {
+        conn.execute(
+            "UPDATE conjugation_encounters SET encounter_count = encounter_count + 1, updated = datetime('now') WHERE id = ?1",
+            params![id],
+        )?;
+        return Ok(id);
+    }
+
+    conn.execute(
+        "INSERT INTO conjugation_encounters (vocabulary_id, surface, conjugation_form, conjugation_type)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![vocabulary_id, surface, conjugation_form, conjugation_type],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{connection, schema};
+
+    fn setup() -> Connection {
+        let conn = connection::open_in_memory().unwrap();
+        schema::run_migrations(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_text_crud() {
+        let conn = setup();
+        let id = insert_text(&conn, "Test Title", "Some content", "text", None).unwrap();
+        let text = get_text_by_id(&conn, id).unwrap().unwrap();
+        assert_eq!(text.title, "Test Title");
+        assert_eq!(text.content, "Some content");
+    }
+
+    #[test]
+    fn test_vocabulary_upsert() {
+        let conn = setup();
+        let id1 = upsert_vocabulary(&conn, "食べる", "たべる", "verb").unwrap();
+        let id2 = upsert_vocabulary(&conn, "食べる", "たべる", "verb").unwrap();
+        assert_eq!(id1, id2, "Upsert should return same id for duplicate");
+
+        let vocab = get_vocabulary_by_id(&conn, id1).unwrap().unwrap();
+        assert_eq!(vocab.status, VocabularyStatus::New);
+
+        update_vocabulary_status(&conn, id1, VocabularyStatus::Learning1).unwrap();
+        let vocab = get_vocabulary_by_id(&conn, id1).unwrap().unwrap();
+        assert_eq!(vocab.status, VocabularyStatus::Learning1);
+    }
+
+    #[test]
+    fn test_conjugation_encounter_upsert() {
+        let conn = setup();
+        let vocab_id = upsert_vocabulary(&conn, "食べる", "たべる", "verb").unwrap();
+        let ce1 = upsert_conjugation_encounter(&conn, vocab_id, "食べた", "past", "ta-form").unwrap();
+        let ce2 = upsert_conjugation_encounter(&conn, vocab_id, "食べた", "past", "ta-form").unwrap();
+        assert_eq!(ce1, ce2);
+
+        // Check count was incremented
+        let count: i32 = conn
+            .query_row("SELECT encounter_count FROM conjugation_encounters WHERE id = ?1", params![ce1], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+}
