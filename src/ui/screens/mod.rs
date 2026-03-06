@@ -1,4 +1,5 @@
+pub mod chapter_select;
+pub mod home;
 pub mod library;
 pub mod placeholder;
 pub mod reader;
-pub mod syosetu;

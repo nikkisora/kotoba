@@ -3,7 +3,10 @@ use rusqlite::Connection;
 
 /// All migrations in order. Each is (version, description, SQL).
 const MIGRATIONS: &[(i32, &str, &str)] = &[
-    (1, "Create texts, paragraphs, tokens tables", r#"
+    (
+        1,
+        "Create texts, paragraphs, tokens tables",
+        r#"
         CREATE TABLE IF NOT EXISTS texts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
@@ -34,9 +37,12 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
             conjugation_type TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_tokens_paragraph_position ON tokens(paragraph_id, position);
-    "#),
-
-    (2, "Create vocabulary table", r#"
+    "#,
+    ),
+    (
+        2,
+        "Create vocabulary table",
+        r#"
         CREATE TABLE IF NOT EXISTS vocabulary (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             base_form TEXT NOT NULL,
@@ -48,9 +54,12 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_vocabulary_base_reading ON vocabulary(base_form, reading);
-    "#),
-
-    (3, "Create conjugation_encounters table", r#"
+    "#,
+    ),
+    (
+        3,
+        "Create conjugation_encounters table",
+        r#"
         CREATE TABLE IF NOT EXISTS conjugation_encounters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             vocabulary_id INTEGER NOT NULL REFERENCES vocabulary(id) ON DELETE CASCADE,
@@ -63,9 +72,12 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
             updated TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_conj_vocab_id ON conjugation_encounters(vocabulary_id);
-    "#),
-
-    (4, "Create srs_cards table", r#"
+    "#,
+    ),
+    (
+        4,
+        "Create srs_cards table",
+        r#"
         CREATE TABLE IF NOT EXISTS srs_cards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             vocabulary_id INTEGER REFERENCES vocabulary(id) ON DELETE CASCADE,
@@ -81,9 +93,12 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_srs_cards_due ON srs_cards(due_date);
-    "#),
-
-    (5, "Create srs_reviews table", r#"
+    "#,
+    ),
+    (
+        5,
+        "Create srs_reviews table",
+        r#"
         CREATE TABLE IF NOT EXISTS srs_reviews (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             card_id INTEGER NOT NULL REFERENCES srs_cards(id) ON DELETE CASCADE,
@@ -93,9 +108,12 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
             typed_answer TEXT,
             answer_correct INTEGER NOT NULL DEFAULT 0
         );
-    "#),
-
-    (6, "Create llm_cache table", r#"
+    "#,
+    ),
+    (
+        6,
+        "Create llm_cache table",
+        r#"
         CREATE TABLE IF NOT EXISTS llm_cache (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_type TEXT NOT NULL DEFAULT '',
@@ -107,9 +125,12 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_cache_hash ON llm_cache(request_hash);
-    "#),
-
-    (7, "Create JMdict tables", r#"
+    "#,
+    ),
+    (
+        7,
+        "Create JMdict tables",
+        r#"
         CREATE TABLE IF NOT EXISTS jmdict_entries (
             ent_seq INTEGER PRIMARY KEY,
             json_blob TEXT NOT NULL
@@ -128,14 +149,20 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
             reading_element TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_jmdict_readings ON jmdict_readings(reading_element);
-    "#),
-
-    (8, "Add surface_reading and sentence_index to tokens", r#"
+    "#,
+    ),
+    (
+        8,
+        "Add surface_reading and sentence_index to tokens",
+        r#"
         ALTER TABLE tokens ADD COLUMN surface_reading TEXT NOT NULL DEFAULT '';
         ALTER TABLE tokens ADD COLUMN sentence_index INTEGER NOT NULL DEFAULT 0;
-    "#),
-
-    (9, "Create web_sources and web_source_chapters tables", r#"
+    "#,
+    ),
+    (
+        9,
+        "Create web_sources and web_source_chapters tables",
+        r#"
         CREATE TABLE IF NOT EXISTS web_sources (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_type TEXT NOT NULL,
@@ -156,11 +183,31 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_wsc_source_id ON web_source_chapters(web_source_id);
-    "#),
-
-    (10, "Add reading progress to texts", r#"
+    "#,
+    ),
+    (
+        10,
+        "Add reading progress to texts",
+        r#"
         ALTER TABLE texts ADD COLUMN last_sentence_index INTEGER NOT NULL DEFAULT 0;
-    "#),
+    "#,
+    ),
+    (
+        11,
+        "Add last_read_at to texts, is_skipped to chapters, total_sentences to texts",
+        r#"
+        ALTER TABLE texts ADD COLUMN last_read_at TEXT;
+        ALTER TABLE texts ADD COLUMN total_sentences INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE web_source_chapters ADD COLUMN is_skipped INTEGER NOT NULL DEFAULT 0;
+    "#,
+    ),
+    (
+        12,
+        "Add chapter_group to web_source_chapters",
+        r#"
+        ALTER TABLE web_source_chapters ADD COLUMN chapter_group TEXT NOT NULL DEFAULT '';
+    "#,
+    ),
 ];
 
 /// Run all pending migrations.
@@ -171,11 +218,15 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
             version INTEGER PRIMARY KEY,
             description TEXT NOT NULL,
             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );"
+        );",
     )?;
 
     let current_version: i32 = conn
-        .query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |row| row.get(0))
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )
         .unwrap_or(0);
 
     for &(version, description, sql) in MIGRATIONS {
@@ -203,8 +254,10 @@ mod tests {
         run_migrations(&conn).unwrap();
 
         let version: i32 = conn
-            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
             .unwrap();
-        assert_eq!(version, 10);
+        assert_eq!(version, 12);
     }
 }

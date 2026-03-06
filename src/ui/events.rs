@@ -3,6 +3,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::import::background::ImportEvent;
+
 /// Application events.
 #[derive(Debug)]
 pub enum Event {
@@ -14,12 +16,14 @@ pub enum Event {
     Resize(u16, u16),
     /// Mouse event (reserved for future use).
     Mouse(crossterm::event::MouseEvent),
+    /// A background import event completed/started/failed.
+    Import(ImportEvent),
 }
 
 /// Event loop that polls crossterm events and sends them via mpsc channel.
 pub struct EventLoop {
     rx: mpsc::Receiver<Event>,
-    _tx: mpsc::Sender<Event>,
+    tx: mpsc::Sender<Event>,
 }
 
 impl EventLoop {
@@ -68,7 +72,12 @@ impl EventLoop {
             }
         });
 
-        Self { rx, _tx: tx }
+        Self { rx, tx }
+    }
+
+    /// Get a sender that can be used to inject events (e.g., from background workers).
+    pub fn sender(&self) -> mpsc::Sender<Event> {
+        self.tx.clone()
     }
 
     /// Receive the next event (blocking).

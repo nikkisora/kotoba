@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, LibraryItem};
 
 /// Source type display icon/label.
 fn source_icon(source_type: &str) -> &str {
@@ -19,19 +19,29 @@ fn source_icon(source_type: &str) -> &str {
     }
 }
 
-/// Render the library screen showing imported texts.
+/// Render a mini progress bar.
+fn progress_bar(current: u64, total: u64, width: usize) -> String {
+    if total == 0 {
+        return "░".repeat(width);
+    }
+    let filled = ((current as f64 / total as f64) * width as f64).round() as usize;
+    let filled = filled.min(width);
+    format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
+}
+
+/// Render the library screen showing imported texts and sources.
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.size();
 
     let outer = Layout::vertical([
         Constraint::Length(1), // title
-        Constraint::Min(3),   // content
+        Constraint::Min(3),    // content
         Constraint::Length(1), // status
     ])
     .split(area);
 
     let lib = app.library_state.as_ref();
-    let texts = lib.map(|l| &l.texts);
+    let items = lib.map(|l| &l.items);
     let selected = lib.map(|l| l.selected).unwrap_or(0);
     let sort_label = lib.map(|l| l.sort.label()).unwrap_or("Date ↓");
     let filter_label = lib
@@ -66,14 +76,15 @@ pub fn render(frame: &mut Frame, app: &App) {
     );
 
     // Content
-    match texts {
-        Some(texts) if !texts.is_empty() => {
+    match items {
+        Some(items) if !items.is_empty() => {
             let stats_map = lib.map(|l| &l.stats);
+            let chapter_counts = lib.map(|l| &l.source_chapter_counts);
 
-            let items: Vec<ListItem> = texts
+            let list_items: Vec<ListItem> = items
                 .iter()
                 .enumerate()
-                .map(|(i, t)| {
+                .map(|(i, item)| {
                     let marker = if i == selected { "▶ " } else { "  " };
                     let style = if i == selected {
                         Style::default()
@@ -82,42 +93,71 @@ pub fn render(frame: &mut Frame, app: &App) {
                     } else {
                         Style::default()
                     };
-                    let icon = source_icon(&t.source_type);
+                    let icon = source_icon(item.source_type());
 
-                    // Build stats string
-                    let stats_str = stats_map
-                        .and_then(|m| m.get(&t.id))
-                        .map(|s| {
-                            let pct = if s.unique_vocab == 0 {
-                                0
+                    let detail_str = match item {
+                        LibraryItem::Text(t) => {
+                            let pbar = progress_bar(
+                                t.last_sentence_index as u64,
+                                t.total_sentences as u64,
+                                10,
+                            );
+                            let pct = if t.total_sentences > 0 {
+                                (t.last_sentence_index * 100 / t.total_sentences) as u8
                             } else {
-                                (s.known_count * 100) / s.unique_vocab
+                                0
                             };
-                            format!(
-                                "  {}w  K:{} L:{} N:{}  {}%",
-                                s.total_tokens, s.known_count, s.learning_count, s.new_count, pct
-                            )
-                        })
-                        .unwrap_or_default();
+
+                            let word_stats = stats_map
+                                .and_then(|m| m.get(&t.id))
+                                .map(|s| {
+                                    let kpct = if s.unique_vocab == 0 {
+                                        0
+                                    } else {
+                                        s.known_count * 100 / s.unique_vocab
+                                    };
+                                    let lpct = if s.unique_vocab == 0 {
+                                        0
+                                    } else {
+                                        s.learning_count * 100 / s.unique_vocab
+                                    };
+                                    let npct = if s.unique_vocab == 0 {
+                                        0
+                                    } else {
+                                        s.new_count * 100 / s.unique_vocab
+                                    };
+                                    format!(" K:{}% L:{}% N:{}%", kpct, lpct, npct)
+                                })
+                                .unwrap_or_default();
+
+                            format!("  {} {}%{}", pbar, pct, word_stats)
+                        }
+                        LibraryItem::Source(ws) => {
+                            let counts = chapter_counts
+                                .and_then(|m| m.get(&ws.id))
+                                .copied()
+                                .unwrap_or((0, 0, 0));
+                            format!("  ({} ch, {} imported)", counts.0, counts.1)
+                        }
+                    };
+
+                    let date_str = &item.created_at()[..10.min(item.created_at().len())];
 
                     ListItem::new(Line::from(vec![
                         Span::styled(marker, style),
                         Span::raw(format!("{} ", icon)),
-                        Span::styled(&t.title, style),
+                        Span::styled(item.title(), style),
                         Span::styled(
-                            format!("  [{}]  {}", t.source_type, &t.created_at[..10.min(t.created_at.len())]),
+                            format!("  [{}]  {}", item.source_type(), date_str),
                             Style::default().fg(Color::DarkGray),
                         ),
-                        Span::styled(
-                            stats_str,
-                            Style::default().fg(Color::Rgb(100, 140, 180)),
-                        ),
+                        Span::styled(detail_str, Style::default().fg(Color::Rgb(100, 140, 180))),
                     ]))
                 })
                 .collect();
 
-            let count_label = format!(" Imported Texts ({}) ", texts.len());
-            let list = List::new(items).block(
+            let count_label = format!(" Library ({}) ", items.len());
+            let list = List::new(list_items).block(
                 Block::default()
                     .title(count_label)
                     .borders(Borders::ALL)
@@ -154,7 +194,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Status bar
     let status = Line::from(vec![
         Span::styled(
-            " ↑↓:navigate  Enter:open  d:delete  i:import  /:search  s:sort  f:filter  Tab:screens  q:quit ",
+            " ↑↓:navigate  Enter:open  d:delete  i:import  /:search  s:sort  f:filter  Esc:home  Tab:reader  q:quit ",
             Style::default().fg(Color::DarkGray),
         ),
     ]);

@@ -1,3 +1,4 @@
+pub mod background;
 pub mod clipboard;
 pub mod epub;
 pub mod subtitle;

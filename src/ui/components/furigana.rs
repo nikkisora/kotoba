@@ -11,9 +11,15 @@ pub fn status_style(status: VocabularyStatus, is_selected: bool) -> Style {
     let base = match status {
         VocabularyStatus::New => Style::default().bg(Color::Blue).fg(Color::White),
         VocabularyStatus::Learning1 => Style::default().bg(Color::Yellow).fg(Color::Black),
-        VocabularyStatus::Learning2 => Style::default().bg(Color::Rgb(200, 180, 60)).fg(Color::Black),
-        VocabularyStatus::Learning3 => Style::default().bg(Color::Rgb(160, 150, 80)).fg(Color::Black),
-        VocabularyStatus::Learning4 => Style::default().bg(Color::Rgb(120, 120, 100)).fg(Color::White),
+        VocabularyStatus::Learning2 => Style::default()
+            .bg(Color::Rgb(200, 180, 60))
+            .fg(Color::Black),
+        VocabularyStatus::Learning3 => Style::default()
+            .bg(Color::Rgb(160, 150, 80))
+            .fg(Color::Black),
+        VocabularyStatus::Learning4 => Style::default()
+            .bg(Color::Rgb(120, 120, 100))
+            .fg(Color::White),
         VocabularyStatus::Known => Style::default(),
         VocabularyStatus::Ignored => Style::default().fg(Color::DarkGray),
     };
@@ -122,12 +128,7 @@ pub fn render_sentence(
                 current_line_y
             };
             if marker_y < area.y + area.height {
-                buf.set_string(
-                    area.x,
-                    marker_y,
-                    "▶",
-                    Style::default().fg(Color::Cyan),
-                );
+                buf.set_string(area.x, marker_y, "▶", Style::default().fg(Color::Cyan));
             }
         }
     }
@@ -181,7 +182,12 @@ pub fn render_sentence(
             } else {
                 0
             };
-            buf.set_string(x + surface_pad as u16, text_y, &layout.surface, layout.style);
+            buf.set_string(
+                x + surface_pad as u16,
+                text_y,
+                &layout.surface,
+                layout.style,
+            );
         }
 
         col += layout.slot_width;

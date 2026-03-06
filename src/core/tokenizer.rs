@@ -22,15 +22,31 @@ impl TokenInfo {
             self.pos.as_str(),
             "Symbol" | "Punctuation" | "Whitespace" | "BOS/EOS" | ""
         ) || self.surface.trim().is_empty()
-          || is_numeric(&self.surface)
-          || is_ascii_only(&self.surface)
+            || is_numeric(&self.surface)
+            || is_ascii_only(&self.surface)
     }
 }
 
 /// Check if a string is purely numeric (digits, decimal points, commas).
 fn is_numeric(s: &str) -> bool {
     let trimmed = s.trim();
-    !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',' || c == '０' || c == '１' || c == '２' || c == '３' || c == '４' || c == '５' || c == '６' || c == '７' || c == '８' || c == '９' || ('０'..='９').contains(&c))
+    !trimmed.is_empty()
+        && trimmed.chars().all(|c| {
+            c.is_ascii_digit()
+                || c == '.'
+                || c == ','
+                || c == '０'
+                || c == '１'
+                || c == '２'
+                || c == '３'
+                || c == '４'
+                || c == '５'
+                || c == '６'
+                || c == '７'
+                || c == '８'
+                || c == '９'
+                || ('０'..='９').contains(&c)
+        })
 }
 
 /// Check if a string contains only ASCII characters (English text, punctuation, etc.).
@@ -43,11 +59,8 @@ fn is_ascii_only(s: &str) -> bool {
 fn create_tokenizer() -> Result<lindera::tokenizer::Tokenizer> {
     let dictionary = lindera::dictionary::load_dictionary("embedded://unidic")
         .map_err(|e| anyhow::anyhow!("Failed to load UniDic dictionary: {}", e))?;
-    let segmenter = lindera::segmenter::Segmenter::new(
-        lindera::mode::Mode::Normal,
-        dictionary,
-        None,
-    );
+    let segmenter =
+        lindera::segmenter::Segmenter::new(lindera::mode::Mode::Normal, dictionary, None);
     Ok(lindera::tokenizer::Tokenizer::new(segmenter))
 }
 
@@ -69,14 +82,12 @@ pub fn tokenize_sentence(text: &str) -> Result<Vec<TokenInfo>> {
         //   8: orthographic_surface_form, 9: phonological_surface_form
         //  10: orthographic_base_form, 11: phonological_base_form
         let details: Vec<String> = token.details().iter().map(|s| s.to_string()).collect();
-        let get = |i: usize| -> &str {
-            details.get(i).map(|s| s.as_str()).unwrap_or("*")
-        };
+        let get = |i: usize| -> &str { details.get(i).map(|s| s.as_str()).unwrap_or("*") };
 
         let major_pos = get(0);
         let conj_type = get(4);
         let conj_form = get(5);
-        let lemma_reading_kata = get(6);   // Index 6: lemma reading (e.g. イク for 行く)
+        let lemma_reading_kata = get(6); // Index 6: lemma reading (e.g. イク for 行く)
         let surface_reading_kata = get(9); // Index 9: surface pronunciation (e.g. イッ for 行っ)
 
         // UniDic uses "orthographic_base_form" (index 10) for the written base form,
@@ -87,7 +98,11 @@ pub fn tokenize_sentence(text: &str) -> Result<Vec<TokenInfo>> {
                 ortho
             } else {
                 let lexeme = get(7);
-                if lexeme != "*" { lexeme } else { &surface }
+                if lexeme != "*" {
+                    lexeme
+                } else {
+                    &surface
+                }
             }
         };
 
@@ -98,8 +113,16 @@ pub fn tokenize_sentence(text: &str) -> Result<Vec<TokenInfo>> {
         result.push(TokenInfo {
             surface: surface.clone(),
             base_form: base_form_raw.to_string(),
-            reading: if reading == "*" { String::new() } else { reading },
-            surface_reading: if surface_reading == "*" { String::new() } else { surface_reading },
+            reading: if reading == "*" {
+                String::new()
+            } else {
+                reading
+            },
+            surface_reading: if surface_reading == "*" {
+                String::new()
+            } else {
+                surface_reading
+            },
             pos: pos.to_string(),
             conjugation_form: normalize_star(conj_form),
             conjugation_type: normalize_star(conj_type),
@@ -111,7 +134,11 @@ pub fn tokenize_sentence(text: &str) -> Result<Vec<TokenInfo>> {
 
 /// Replace "*" with empty string.
 fn normalize_star(s: &str) -> String {
-    if s == "*" { String::new() } else { s.to_string() }
+    if s == "*" {
+        String::new()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Map UniDic major POS tags to simplified categories.
@@ -129,13 +156,13 @@ fn map_pos(major_pos: &str) -> &'static str {
         "助動詞" => "Auxiliary",
         "接続詞" => "Conjunction",
         "記号" => "Symbol",
-        "補助記号" => "Symbol",        // UniDic: supplementary symbols (。、etc.)
+        "補助記号" => "Symbol", // UniDic: supplementary symbols (。、etc.)
         "感動詞" => "Interjection",
         "連体詞" => "Adnominal",
-        "接頭辞" => "Prefix",          // UniDic spelling
-        "接頭詞" => "Prefix",          // IPADIC spelling
-        "接尾辞" => "Suffix",          // UniDic-specific
-        "空白" => "Whitespace",        // UniDic whitespace category
+        "接頭辞" => "Prefix",   // UniDic spelling
+        "接頭詞" => "Prefix",   // IPADIC spelling
+        "接尾辞" => "Suffix",   // UniDic-specific
+        "空白" => "Whitespace", // UniDic whitespace category
         "フィラー" => "Filler",
         "BOS/EOS" => "BOS/EOS",
         _ => "Other",
@@ -223,7 +250,11 @@ mod tests {
         assert!(!tokens.is_empty());
         // UniDic should recognize 食べる as a verb
         let verb = tokens.iter().find(|t| t.pos == "Verb");
-        assert!(verb.is_some(), "Should find a verb token, got: {:?}", tokens);
+        assert!(
+            verb.is_some(),
+            "Should find a verb token, got: {:?}",
+            tokens
+        );
     }
 
     #[test]
@@ -232,7 +263,11 @@ mod tests {
         assert!(!tokens.is_empty());
         // "食べた" should decompose to 食べ (verb) + た (auxiliary)
         let verb = tokens.iter().find(|t| t.pos == "Verb");
-        assert!(verb.is_some(), "Should find a verb token, got: {:?}", tokens);
+        assert!(
+            verb.is_some(),
+            "Should find a verb token, got: {:?}",
+            tokens
+        );
     }
 
     #[test]

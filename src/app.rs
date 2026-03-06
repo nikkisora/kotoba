@@ -6,28 +6,15 @@ use std::time::Instant;
 use crate::config::AppConfig;
 use crate::core::dictionary::{self, DictEntry};
 use crate::db::models::{self, TextStats, Vocabulary, VocabularyStatus};
-use crate::import::syosetu::SyosetuNovel;
 
 /// Which screen is currently active.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Screen {
+    Home,
     Library,
+    ChapterSelect { source_id: i64 },
     Reader,
-    Syosetu,
     Review,
-    Stats,
-}
-
-impl Screen {
-    pub fn next(self) -> Self {
-        match self {
-            Screen::Library => Screen::Reader,
-            Screen::Reader => Screen::Syosetu,
-            Screen::Syosetu => Screen::Review,
-            Screen::Review => Screen::Stats,
-            Screen::Stats => Screen::Library,
-        }
-    }
 }
 
 /// What kind of popup is being shown.
@@ -45,35 +32,23 @@ pub enum PopupState {
     /// Help overlay showing keybindings.
     Help,
     /// Note editor for a word.
-    NoteEditor {
-        vocabulary_id: i64,
-        text: String,
-    },
+    NoteEditor { vocabulary_id: i64, text: String },
     /// Quit confirmation.
     QuitConfirm,
     /// Delete text confirmation.
-    DeleteConfirm {
-        text_id: i64,
-        title: String,
-    },
+    DeleteConfirm { text_id: i64, title: String },
+    /// Delete web source confirmation.
+    DeleteSourceConfirm { source_id: i64, title: String },
     /// Import sub-menu (clipboard / URL / file).
     ImportMenu,
     /// URL text input for web import.
-    UrlInput {
-        text: String,
-    },
+    UrlInput { text: String },
     /// Search/filter input for library.
-    SearchInput {
-        text: String,
-    },
+    SearchInput { text: String },
     /// File path input for file/epub/subtitle import.
-    FilePathInput {
-        text: String,
-    },
+    FilePathInput { text: String },
     /// Syosetu ncode input.
-    SyosetuInput {
-        text: String,
-    },
+    SyosetuInput { text: String },
 }
 
 /// A token as displayed in the reader.
@@ -157,10 +132,43 @@ impl LibrarySort {
     }
 }
 
+/// An item shown in the library list — either a standalone text or a grouped source.
+#[derive(Debug, Clone)]
+pub enum LibraryItem {
+    /// A single text (plain text, clipboard, web, subtitle).
+    Text(models::Text),
+    /// A grouped multi-chapter source (Syosetu, EPUB).
+    Source(models::WebSource),
+}
+
+impl LibraryItem {
+    pub fn title(&self) -> &str {
+        match self {
+            LibraryItem::Text(t) => &t.title,
+            LibraryItem::Source(s) => &s.title,
+        }
+    }
+
+    pub fn source_type(&self) -> &str {
+        match self {
+            LibraryItem::Text(t) => &t.source_type,
+            LibraryItem::Source(s) => &s.source_type,
+        }
+    }
+
+    pub fn created_at(&self) -> &str {
+        match self {
+            LibraryItem::Text(t) => &t.created_at,
+            LibraryItem::Source(s) => &s.last_synced,
+        }
+    }
+}
+
 /// Library screen state.
 pub struct LibraryState {
-    pub texts: Vec<models::Text>,
+    pub items: Vec<LibraryItem>,
     pub stats: HashMap<i64, TextStats>,
+    pub source_chapter_counts: HashMap<i64, (usize, usize, usize)>, // source_id -> (total, imported, skipped)
     pub selected: usize,
     pub sort: LibrarySort,
     pub filter_source: Option<String>,
@@ -168,38 +176,309 @@ pub struct LibraryState {
     pub source_types: Vec<String>,
 }
 
-/// Syosetu novel browser state.
-pub struct SyosetuState {
-    pub novel: SyosetuNovel,
-    pub selected_chapter: usize,
+/// Reading state of a chapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChapterReadState {
+    /// Not imported yet.
+    NotImported,
+    /// Imported but not started reading.
+    Unread,
+    /// Reading in progress (has progress but not finished).
+    InProgress,
+    /// Finished reading (reached the end).
+    Finished,
+}
+
+/// Chapter select screen state (for multi-chapter sources: Syosetu, EPUB, etc.).
+pub struct ChapterSelectState {
+    pub source: models::WebSource,
+    pub chapters: Vec<models::WebSourceChapter>,
+    pub selected: usize,
+    pub page: usize,
+    pub page_size: usize,
+    pub total_chapters: usize,
+    pub total_imported: usize,
+    pub total_skipped: usize,
+    /// True while novel metadata is being fetched in background.
+    pub loading: bool,
+    /// Reading state per chapter (keyed by chapter id).
+    pub chapter_read_states: HashMap<i64, ChapterReadState>,
+}
+
+impl ChapterSelectState {
+    /// Get the chapters visible on the current page.
+    pub fn visible_chapters(&self) -> &[models::WebSourceChapter] {
+        let start = self.page * self.page_size;
+        let end = (start + self.page_size).min(self.chapters.len());
+        if start < self.chapters.len() {
+            &self.chapters[start..end]
+        } else {
+            &[]
+        }
+    }
+
+    /// Index within the current page.
+    pub fn page_selected(&self) -> usize {
+        self.selected.saturating_sub(self.page * self.page_size)
+    }
+
+    /// Total number of pages.
+    pub fn total_pages(&self) -> usize {
+        if self.chapters.is_empty() {
+            1
+        } else {
+            (self.chapters.len() + self.page_size - 1) / self.page_size
+        }
+    }
+}
+
+/// Home screen state.
+pub struct HomeState {
+    pub recent_texts: Vec<models::Text>,
+    pub recent_stats: HashMap<i64, TextStats>,
+    pub selected: usize,
 }
 
 /// Central application state.
 pub struct App {
     pub screen: Screen,
+    pub previous_screen: Option<Screen>,
     pub config: AppConfig,
     pub reader_state: Option<ReaderState>,
     pub library_state: Option<LibraryState>,
-    pub syosetu_state: Option<SyosetuState>,
+    pub chapter_select_state: Option<ChapterSelectState>,
+    pub home_state: Option<HomeState>,
+    pub background_importer: Option<crate::import::background::BackgroundImporter>,
+    /// Set of chapter_ids currently being preprocessed (for UI spinners).
+    pub preprocessing_chapters: std::collections::HashSet<i64>,
+    /// Progress of preprocessing chapters: chapter_id -> (phase, percent).
+    pub preprocessing_progress: HashMap<i64, (&'static str, u8)>,
     pub popup: Option<PopupState>,
     pub message: Option<(String, Instant)>,
     pub should_quit: bool,
     pub db_path: std::path::PathBuf,
+    /// Monotonic tick counter for animations (spinners, etc.).
+    pub tick_count: u64,
+    /// Chapter ID we're waiting on to auto-open when its import completes.
+    pub pending_open_chapter: Option<i64>,
 }
 
 impl App {
     pub fn new(config: AppConfig) -> Self {
         let db_path = config.db_path();
         Self {
-            screen: Screen::Library,
+            screen: Screen::Home,
+            previous_screen: None,
             config,
             reader_state: None,
             library_state: None,
-            syosetu_state: None,
+            chapter_select_state: None,
+            home_state: None,
+            background_importer: None,
+            preprocessing_chapters: std::collections::HashSet::new(),
+            preprocessing_progress: HashMap::new(),
             popup: None,
             message: None,
             should_quit: false,
             db_path,
+            tick_count: 0,
+            pending_open_chapter: None,
+        }
+    }
+
+    /// Initialize the background importer with an event sender.
+    pub fn init_background_importer(
+        &mut self,
+        event_tx: std::sync::mpsc::Sender<crate::ui::events::Event>,
+    ) {
+        let import_tx = event_tx.clone();
+        let (itx, irx) = std::sync::mpsc::channel();
+
+        // Spawn a bridge thread that forwards ImportEvents into the main Event channel
+        std::thread::spawn(move || {
+            while let Ok(evt) = irx.recv() {
+                if import_tx
+                    .send(crate::ui::events::Event::Import(evt))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        self.background_importer = Some(crate::import::background::BackgroundImporter::new(itx, 3));
+    }
+
+    /// Start preprocessing chapters for the current chapter select source.
+    /// Ensures that the next `preprocess_ahead` unimported, unskipped chapters
+    /// (counting from the first such chapter) are either already preprocessed,
+    /// in-flight, or queued.
+    pub fn start_preprocessing(&mut self) {
+        let target = self.config.reader.preprocess_ahead;
+        let state = match self.chapter_select_state.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Find up to `target` chapters that need preprocessing:
+        // Walk the chapter list, skip imported/skipped/in-flight/queued,
+        // collect the ones that are not yet imported and not being processed.
+        let mut to_queue: Vec<(i64, i32)> = Vec::new(); // (chapter_id, chapter_number)
+        let mut budget = target;
+
+        for ch in &state.chapters {
+            if budget == 0 {
+                break;
+            }
+            if ch.is_skipped {
+                continue;
+            }
+            if ch.text_id.is_some() {
+                // Already imported — counts against budget only if unread
+                if matches!(
+                    state.chapter_read_states.get(&ch.id),
+                    Some(ChapterReadState::Unread)
+                ) {
+                    budget -= 1;
+                }
+                continue;
+            }
+            // Not imported — either already processing or needs to be queued
+            if self.preprocessing_chapters.contains(&ch.id) {
+                budget -= 1;
+                continue;
+            }
+            // Needs to be queued
+            to_queue.push((ch.id, ch.chapter_number));
+            budget -= 1;
+        }
+
+        if to_queue.is_empty() {
+            return;
+        }
+
+        let source_id = state.source.id;
+        let source_type = state.source.source_type.clone();
+        let external_id = state.source.external_id.clone();
+        let db_path = self.db_path.clone();
+        if let Some(ref mut importer) = self.background_importer {
+            for (ch_id, ch_num) in to_queue {
+                importer.queue_single(
+                    source_id,
+                    &source_type,
+                    &external_id,
+                    ch_id,
+                    ch_num,
+                    &db_path,
+                );
+                self.preprocessing_chapters.insert(ch_id);
+            }
+        }
+    }
+
+    /// Handle a background import event.
+    pub fn handle_import_event(&mut self, event: crate::import::background::ImportEvent) {
+        use crate::import::background::ImportEvent;
+        match event {
+            ImportEvent::Started {
+                chapter_id,
+                chapter_number,
+                ..
+            } => {
+                self.preprocessing_chapters.insert(chapter_id);
+                self.preprocessing_progress.insert(chapter_id, ("fetch", 0));
+                self.set_message(format!("Preprocessing chapter {}...", chapter_number));
+            }
+            ImportEvent::Progress {
+                chapter_id,
+                phase,
+                percent,
+            } => {
+                self.preprocessing_progress
+                    .insert(chapter_id, (phase, percent));
+            }
+            ImportEvent::Completed {
+                source_id,
+                chapter_id,
+                chapter_number,
+                text_id,
+            } => {
+                self.preprocessing_chapters.remove(&chapter_id);
+                self.preprocessing_progress.remove(&chapter_id);
+                self.set_message(format!("Chapter {} ready", chapter_number));
+
+                // Auto-open if we were waiting on this chapter
+                if self.pending_open_chapter == Some(chapter_id) {
+                    self.pending_open_chapter = None;
+                    self.previous_screen = Some(Screen::ChapterSelect { source_id });
+                    if let Err(e) = self.load_text(text_id) {
+                        self.set_message(format!("Error loading: {}", e));
+                    }
+                    return;
+                }
+
+                // Refresh chapter select and top up preprocessing queue
+                if let Screen::ChapterSelect { source_id: sid } = &self.screen {
+                    if *sid == source_id {
+                        let _ = self.load_chapter_select(source_id);
+                        self.start_preprocessing();
+                    }
+                }
+            }
+            ImportEvent::Failed {
+                chapter_id,
+                chapter_number,
+                error,
+                ..
+            } => {
+                self.preprocessing_chapters.remove(&chapter_id);
+                self.preprocessing_progress.remove(&chapter_id);
+                self.set_message(format!("Chapter {} failed: {}", chapter_number, error));
+            }
+            ImportEvent::Cancelled { chapter_id, .. } => {
+                self.preprocessing_chapters.remove(&chapter_id);
+                self.preprocessing_progress.remove(&chapter_id);
+            }
+            ImportEvent::ChaptersPageLoaded {
+                source_id,
+                page,
+                total_so_far,
+                has_next,
+            } => {
+                // Refresh chapter list if we're viewing this source
+                if let Screen::ChapterSelect { source_id: sid } = &self.screen {
+                    if *sid == source_id {
+                        // Reload chapters from DB to pick up newly saved ones
+                        let _ = self.load_chapter_select(source_id);
+                        // Keep loading state if more pages are coming
+                        if let Some(cs) = self.chapter_select_state.as_mut() {
+                            cs.loading = has_next;
+                        }
+                    }
+                }
+                if has_next {
+                    self.set_message(format!(
+                        "Loading chapters... page {}, {} so far",
+                        page, total_so_far
+                    ));
+                }
+            }
+            ImportEvent::NovelInfoLoaded { source_id, title } => {
+                self.set_message(format!("Loaded: {}", title));
+                // Mark loading as done and do a final refresh
+                if let Screen::ChapterSelect { source_id: sid } = &self.screen {
+                    if *sid == source_id {
+                        let _ = self.load_chapter_select(source_id);
+                        if let Some(cs) = self.chapter_select_state.as_mut() {
+                            cs.loading = false;
+                        }
+                        self.start_preprocessing();
+                    }
+                }
+            }
+            ImportEvent::NovelInfoFailed { ncode, error } => {
+                self.set_message(format!("Failed to load {}: {}", ncode, error));
+            }
         }
     }
 
@@ -211,8 +490,9 @@ impl App {
         self.message = Some((msg.into(), Instant::now()));
     }
 
-    /// Clear expired messages (older than 3 seconds).
+    /// Clear expired messages (older than 3 seconds) and advance tick counter.
     pub fn tick(&mut self) {
+        self.tick_count = self.tick_count.wrapping_add(1);
         if let Some((_, when)) = &self.message {
             if when.elapsed().as_secs() >= 3 {
                 self.message = None;
@@ -220,64 +500,147 @@ impl App {
         }
     }
 
-    /// Refresh the library text list with stats, sorting, and filtering.
+    /// Get the current spinner character (Braille animation).
+    pub fn spinner_char(&self) -> char {
+        const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        // Tick is ~60ms, so divide by 3 for ~180ms per frame (good visual speed)
+        SPINNER[(self.tick_count as usize / 3) % SPINNER.len()]
+    }
+
+    /// Refresh the home screen state.
+    pub fn refresh_home(&mut self) -> Result<()> {
+        let conn = self.open_db()?;
+        let recent = models::list_recent_texts(&conn, 15)?;
+        let mut stats = HashMap::new();
+        for t in &recent {
+            if let Ok(s) = models::get_text_stats(&conn, t.id) {
+                stats.insert(t.id, s);
+            }
+        }
+        let selected = self
+            .home_state
+            .as_ref()
+            .map(|s| s.selected.min(recent.len().saturating_sub(1)))
+            .unwrap_or(0);
+        self.home_state = Some(HomeState {
+            recent_texts: recent,
+            recent_stats: stats,
+            selected,
+        });
+        Ok(())
+    }
+
+    /// Refresh the library list: standalone texts + grouped web sources.
     pub fn refresh_library(&mut self) -> Result<()> {
         let conn = self.open_db()?;
 
         // Preserve current sort/filter from existing state
-        let (sort, filter_source) = self.library_state.as_ref()
+        let (sort, filter_source) = self
+            .library_state
+            .as_ref()
             .map(|s| (s.sort, s.filter_source.clone()))
             .unwrap_or((LibrarySort::DateDesc, None));
 
-        // Get all texts (or filtered)
-        let mut texts = if let Some(ref src) = filter_source {
-            models::list_texts_by_source_type(&conn, src)?
-        } else {
-            models::list_all_texts(&conn)?
-        };
+        // Get standalone texts (not belonging to any web_source)
+        let standalone_texts = models::list_standalone_texts(&conn)?;
+        let web_sources = models::list_web_sources(&conn)?;
+
+        // Build unified items list
+        let mut items: Vec<LibraryItem> = Vec::new();
+
+        for t in standalone_texts {
+            if let Some(ref src) = filter_source {
+                if t.source_type != *src {
+                    continue;
+                }
+            }
+            items.push(LibraryItem::Text(t));
+        }
+
+        for ws in &web_sources {
+            if let Some(ref src) = filter_source {
+                if ws.source_type != *src {
+                    continue;
+                }
+            }
+            items.push(LibraryItem::Source(ws.clone()));
+        }
 
         // Collect unique source types
-        let source_types = {
-            let all = models::list_all_texts(&conn)?;
-            let mut types: Vec<String> = all.iter().map(|t| t.source_type.clone()).collect();
-            types.sort();
-            types.dedup();
-            types
-        };
+        let mut source_types: Vec<String> =
+            items.iter().map(|i| i.source_type().to_string()).collect();
+        source_types.sort();
+        source_types.dedup();
 
-        // Load per-text stats
+        // Load per-text stats for standalone texts
         let mut stats = HashMap::new();
-        for t in &texts {
-            if let Ok(s) = models::get_text_stats(&conn, t.id) {
-                stats.insert(t.id, s);
+        for item in &items {
+            if let LibraryItem::Text(t) = item {
+                if let Ok(s) = models::get_text_stats(&conn, t.id) {
+                    stats.insert(t.id, s);
+                }
+            }
+        }
+
+        // Load chapter counts for web sources
+        let mut source_chapter_counts = HashMap::new();
+        for ws in &web_sources {
+            if let Ok(counts) = models::get_source_chapter_counts(&conn, ws.id) {
+                source_chapter_counts.insert(ws.id, counts);
             }
         }
 
         // Apply sort
         match sort {
-            LibrarySort::DateDesc => texts.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
-            LibrarySort::DateAsc => texts.sort_by(|a, b| a.created_at.cmp(&b.created_at)),
-            LibrarySort::TitleAsc => texts.sort_by(|a, b| a.title.cmp(&b.title)),
+            LibrarySort::DateDesc => items.sort_by(|a, b| b.created_at().cmp(a.created_at())),
+            LibrarySort::DateAsc => items.sort_by(|a, b| a.created_at().cmp(b.created_at())),
+            LibrarySort::TitleAsc => items.sort_by(|a, b| a.title().cmp(b.title())),
             LibrarySort::Completion => {
-                texts.sort_by(|a, b| {
-                    let pct_a = stats.get(&a.id).map(|s| {
-                        if s.unique_vocab == 0 { 0.0 } else { s.known_count as f64 / s.unique_vocab as f64 }
-                    }).unwrap_or(0.0);
-                    let pct_b = stats.get(&b.id).map(|s| {
-                        if s.unique_vocab == 0 { 0.0 } else { s.known_count as f64 / s.unique_vocab as f64 }
-                    }).unwrap_or(0.0);
-                    pct_b.partial_cmp(&pct_a).unwrap_or(std::cmp::Ordering::Equal)
+                // Sort by completion for texts, sources go at the end
+                items.sort_by(|a, b| {
+                    let pct_a = match a {
+                        LibraryItem::Text(t) => stats
+                            .get(&t.id)
+                            .map(|s| {
+                                if s.unique_vocab == 0 {
+                                    0.0
+                                } else {
+                                    s.known_count as f64 / s.unique_vocab as f64
+                                }
+                            })
+                            .unwrap_or(0.0),
+                        _ => 0.0,
+                    };
+                    let pct_b = match b {
+                        LibraryItem::Text(t) => stats
+                            .get(&t.id)
+                            .map(|s| {
+                                if s.unique_vocab == 0 {
+                                    0.0
+                                } else {
+                                    s.known_count as f64 / s.unique_vocab as f64
+                                }
+                            })
+                            .unwrap_or(0.0),
+                        _ => 0.0,
+                    };
+                    pct_b
+                        .partial_cmp(&pct_a)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 });
             }
         }
 
-        let selected = self.library_state.as_ref()
-            .map(|s| s.selected.min(texts.len().saturating_sub(1)))
+        let selected = self
+            .library_state
+            .as_ref()
+            .map(|s| s.selected.min(items.len().saturating_sub(1)))
             .unwrap_or(0);
 
         self.library_state = Some(LibraryState {
-            texts,
+            items,
             stats,
+            source_chapter_counts,
             selected,
             sort,
             filter_source,
@@ -356,7 +719,8 @@ impl App {
             let mut seen = std::collections::HashSet::new();
             for para in &paragraphs {
                 for tok in &para.db_tokens {
-                    if !is_trivial_pos(&tok.pos, &tok.surface) && seen.insert(tok.base_form.clone()) {
+                    if !is_trivial_pos(&tok.pos, &tok.surface) && seen.insert(tok.base_form.clone())
+                    {
                         base_forms.push(tok.base_form.clone());
                     }
                 }
@@ -395,7 +759,15 @@ impl App {
 
         // Restore saved reading progress
         let saved_index = models::get_reading_progress(&conn, text_id).unwrap_or(0);
-        let sentence_index = if saved_index < sentences.len() { saved_index } else { 0 };
+        let sentence_index = if saved_index < sentences.len() {
+            saved_index
+        } else {
+            0
+        };
+
+        // Update total_sentences and touch last_read_at
+        let _ = models::update_total_sentences(&conn, text_id, sentences.len());
+        let _ = models::touch_last_read(&conn, text_id);
 
         self.reader_state = Some(ReaderState {
             text_id,
@@ -410,6 +782,7 @@ impl App {
             sidebar_scroll: 0,
         });
 
+        self.previous_screen = Some(self.screen.clone());
         self.screen = Screen::Reader;
         self.set_message(format!("Loaded: {}", text.title));
         Ok(())
@@ -418,7 +791,11 @@ impl App {
     /// Refresh token display after vocabulary changes.
     pub fn refresh_reader_display(&mut self) -> Result<()> {
         if let Some(ref mut state) = self.reader_state {
-            state.sentences = build_sentences(&state.paragraphs, &state.vocabulary_cache, &state.gloss_cache);
+            state.sentences = build_sentences(
+                &state.paragraphs,
+                &state.vocabulary_cache,
+                &state.gloss_cache,
+            );
         }
         Ok(())
     }
@@ -456,10 +833,9 @@ impl App {
         // Update cache & patch affected tokens in-place (no full rebuild)
         if let Some(ref mut state) = self.reader_state {
             if let Some(vocab) = models::get_vocabulary_by_id(&conn, vid)? {
-                state.vocabulary_cache.insert(
-                    (base_form.clone(), reading.clone()),
-                    vocab,
-                );
+                state
+                    .vocabulary_cache
+                    .insert((base_form.clone(), reading.clone()), vocab);
             }
             // Patch all tokens matching this base_form+reading
             for sentence in &mut state.sentences {
@@ -511,7 +887,12 @@ impl App {
             let vocab = state.vocabulary_cache.get(&key);
             let notes = vocab.and_then(|v| v.notes.clone());
             let vocab_id = vocab.map(|v| v.id);
-            (token.base_form.clone(), token.reading.clone(), notes, vocab_id)
+            (
+                token.base_form.clone(),
+                token.reading.clone(),
+                notes,
+                vocab_id,
+            )
         };
 
         let conn = self.open_db()?;
@@ -585,6 +966,25 @@ impl App {
         Ok(())
     }
 
+    /// Delete a web source (and all its chapters/texts) and refresh the library.
+    pub fn delete_source(&mut self, source_id: i64) -> Result<()> {
+        // Cancel any in-flight preprocessing for this source
+        if let Some(ref importer) = self.background_importer {
+            if let Some(ref state) = self.chapter_select_state {
+                if state.source.id == source_id {
+                    for ch in &state.chapters {
+                        importer.cancel_chapter(ch.id);
+                        self.preprocessing_chapters.remove(&ch.id);
+                    }
+                }
+            }
+        }
+        let conn = self.open_db()?;
+        models::delete_web_source(&conn, source_id)?;
+        self.refresh_library()?;
+        Ok(())
+    }
+
     /// Import from clipboard (TUI context).
     pub fn import_clipboard(&mut self) -> Result<String> {
         let conn = self.open_db()?;
@@ -608,7 +1008,8 @@ impl App {
             anyhow::bail!("File not found: {}", path_str);
         }
         let conn = self.open_db()?;
-        let ext = path.extension()
+        let ext = path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
@@ -624,13 +1025,17 @@ impl App {
             }
             _ => {
                 let text_id = crate::import::text::import_text_quiet(
-                    path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled"),
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("Untitled"),
                     &std::fs::read_to_string(&path)?,
                     "text",
                     None,
                     &conn,
                 )?;
-                let text = models::get_text_by_id(&conn, text_id)?.map(|t| t.title).unwrap_or_default();
+                let text = models::get_text_by_id(&conn, text_id)?
+                    .map(|t| t.title)
+                    .unwrap_or_default();
                 text
             }
         };
@@ -638,15 +1043,129 @@ impl App {
         Ok(result)
     }
 
-    /// Load a Syosetu novel by ncode into the Syosetu TUI screen.
+    /// Start loading a Syosetu novel by ncode in the background.
+    /// Goes to chapter select immediately with a loading state.
     pub fn load_syosetu(&mut self, ncode_input: &str) -> Result<()> {
         let ncode = crate::import::syosetu::parse_ncode(ncode_input)?;
-        let novel = crate::import::syosetu::fetch_novel_info(&ncode)?;
-        self.syosetu_state = Some(SyosetuState {
-            novel,
-            selected_chapter: 0,
+
+        // Check if already in DB
+        let conn = self.open_db()?;
+        if let Ok(Some(ws)) = models::find_web_source(&conn, "syosetu", &ncode) {
+            // Already fetched — go directly to chapter select
+            return self.load_chapter_select(ws.id);
+        }
+        drop(conn);
+
+        // Set up a loading chapter select screen immediately
+        let placeholder_source = models::WebSource {
+            id: -1, // sentinel — will be replaced when data arrives
+            source_type: "syosetu".to_string(),
+            external_id: ncode.clone(),
+            title: format!("Loading {}...", ncode),
+            metadata_json: String::new(),
+            last_synced: String::new(),
+        };
+        self.chapter_select_state = Some(ChapterSelectState {
+            source: placeholder_source,
+            chapters: vec![],
+            selected: 0,
+            page: 0,
+            page_size: 50,
+            total_chapters: 0,
+            total_imported: 0,
+            total_skipped: 0,
+            loading: true,
+            chapter_read_states: HashMap::new(),
         });
-        self.screen = Screen::Syosetu;
+        self.screen = Screen::ChapterSelect { source_id: -1 };
+
+        // Fetch in background
+        if let Some(ref importer) = self.background_importer {
+            importer.fetch_novel_info(ncode, self.db_path.clone());
+        } else {
+            anyhow::bail!("Background importer not initialized");
+        }
+        Ok(())
+    }
+
+    /// Load the chapter select screen for any multi-chapter source.
+    pub fn load_chapter_select(&mut self, source_id: i64) -> Result<()> {
+        let conn = self.open_db()?;
+        let source = models::get_web_source_by_id(&conn, source_id)?
+            .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
+        let chapters = models::list_chapters_by_source(&conn, source_id)?;
+        let (total, imported, skipped) = models::get_source_chapter_counts(&conn, source_id)?;
+
+        // Build reading state map for chapters with text_ids
+        let mut chapter_read_states = HashMap::new();
+        for ch in &chapters {
+            if ch.is_skipped {
+                continue; // Skipped state is handled separately
+            }
+            if let Some(text_id) = ch.text_id {
+                // Look up reading progress for this text
+                let text = models::get_text_by_id(&conn, text_id)?;
+                let state = match text {
+                    Some(t) => {
+                        if t.total_sentences == 0 {
+                            ChapterReadState::Unread
+                        } else if t.last_sentence_index >= t.total_sentences - 1 {
+                            ChapterReadState::Finished
+                        } else if t.last_sentence_index > 0 {
+                            ChapterReadState::InProgress
+                        } else {
+                            ChapterReadState::Unread
+                        }
+                    }
+                    None => ChapterReadState::NotImported,
+                };
+                chapter_read_states.insert(ch.id, state);
+            } else {
+                chapter_read_states.insert(ch.id, ChapterReadState::NotImported);
+            }
+        }
+
+        let selected = self
+            .chapter_select_state
+            .as_ref()
+            .filter(|s| s.source.id == source_id)
+            .map(|s| s.selected.min(chapters.len().saturating_sub(1)))
+            .unwrap_or(0);
+        let page = selected / 50;
+
+        let is_syosetu = source.source_type == "syosetu";
+        let ncode = source.external_id.clone();
+        let chapter_count = chapters.len();
+
+        self.chapter_select_state = Some(ChapterSelectState {
+            source,
+            chapters,
+            selected,
+            page,
+            page_size: 50,
+            total_chapters: total,
+            total_imported: imported,
+            total_skipped: skipped,
+            loading: false,
+            chapter_read_states,
+        });
+        self.screen = Screen::ChapterSelect { source_id };
+
+        // Start eager preprocessing
+        self.start_preprocessing();
+
+        // Auto-refresh: check for new chapters in the background for Syosetu sources
+        if is_syosetu {
+            if let Some(ref importer) = self.background_importer {
+                importer.refresh_novel_chapters(
+                    source_id,
+                    ncode,
+                    chapter_count,
+                    self.db_path.clone(),
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -659,11 +1178,23 @@ impl App {
         Ok(())
     }
 
-    /// Go back to library from reader, saving progress.
-    pub fn back_to_library(&mut self) -> Result<()> {
+    /// Go back from reader to the previous screen, saving progress.
+    pub fn back_from_reader(&mut self) -> Result<()> {
         let _ = self.save_reading_progress();
-        self.screen = Screen::Library;
-        self.refresh_library()?;
+        let target = self.previous_screen.take().unwrap_or(Screen::Home);
+        self.screen = target.clone();
+        match target {
+            Screen::Library => {
+                let _ = self.refresh_library();
+            }
+            Screen::Home => {
+                let _ = self.refresh_home();
+            }
+            Screen::ChapterSelect { source_id } => {
+                let _ = self.load_chapter_select(source_id);
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -671,18 +1202,35 @@ impl App {
     pub fn search_library(&mut self, query: &str) -> Result<()> {
         let conn = self.open_db()?;
         let texts = models::search_texts(&conn, query)?;
+        let mut items: Vec<LibraryItem> = Vec::new();
         let mut stats = HashMap::new();
-        for t in &texts {
+        for t in texts {
             if let Ok(s) = models::get_text_stats(&conn, t.id) {
                 stats.insert(t.id, s);
             }
+            items.push(LibraryItem::Text(t));
         }
-        let source_types = self.library_state.as_ref()
+        // Also search web sources by title
+        let web_sources = models::list_web_sources(&conn)?;
+        let query_lower = query.to_lowercase();
+        let mut source_chapter_counts = HashMap::new();
+        for ws in web_sources {
+            if ws.title.to_lowercase().contains(&query_lower) {
+                if let Ok(counts) = models::get_source_chapter_counts(&conn, ws.id) {
+                    source_chapter_counts.insert(ws.id, counts);
+                }
+                items.push(LibraryItem::Source(ws));
+            }
+        }
+        let source_types = self
+            .library_state
+            .as_ref()
             .map(|s| s.source_types.clone())
             .unwrap_or_default();
         self.library_state = Some(LibraryState {
-            texts,
+            items,
             stats,
+            source_chapter_counts,
             selected: 0,
             sort: LibrarySort::DateDesc,
             filter_source: None,
@@ -693,9 +1241,17 @@ impl App {
 
     /// Save note from the note editor.
     pub fn save_note(&mut self) -> Result<()> {
-        if let Some(PopupState::NoteEditor { vocabulary_id, ref text }) = self.popup {
+        if let Some(PopupState::NoteEditor {
+            vocabulary_id,
+            ref text,
+        }) = self.popup
+        {
             let conn = self.open_db()?;
-            let notes: Option<&str> = if text.is_empty() { None } else { Some(text.as_str()) };
+            let notes: Option<&str> = if text.is_empty() {
+                None
+            } else {
+                Some(text.as_str())
+            };
             conn.execute(
                 "UPDATE vocabulary SET notes = ?1, updated_at = datetime('now') WHERE id = ?2",
                 rusqlite::params![notes, vocabulary_id],
@@ -703,10 +1259,9 @@ impl App {
 
             if let Some(vocab) = models::get_vocabulary_by_id(&conn, vocabulary_id)? {
                 if let Some(ref mut state) = self.reader_state {
-                    state.vocabulary_cache.insert(
-                        (vocab.base_form.clone(), vocab.reading.clone()),
-                        vocab,
-                    );
+                    state
+                        .vocabulary_cache
+                        .insert((vocab.base_form.clone(), vocab.reading.clone()), vocab);
                 }
             }
             self.set_message("Note saved");
@@ -738,7 +1293,10 @@ fn build_sentences(
         for (i, db_tok) in para.db_tokens.iter().enumerate() {
             if db_tok.sentence_index != current_sent_idx {
                 // Flush current sentence
-                let text = current_tokens.iter().map(|t| t.surface.as_str()).collect::<String>();
+                let text = current_tokens
+                    .iter()
+                    .map(|t| t.surface.as_str())
+                    .collect::<String>();
                 sentences.push(SentenceData {
                     paragraph_idx: para_idx,
                     start_token,
@@ -756,11 +1314,14 @@ fn build_sentences(
             let status = vocab.map(|v| v.status).unwrap_or(VocabularyStatus::New);
 
             // A token is trivial if its POS says so, OR if its vocabulary status is Ignored
-            let is_trivial = is_trivial_pos(&db_tok.pos, &db_tok.surface)
-                || status == VocabularyStatus::Ignored;
+            let is_trivial =
+                is_trivial_pos(&db_tok.pos, &db_tok.surface) || status == VocabularyStatus::Ignored;
 
             let short_gloss = if !is_trivial {
-                gloss_cache.get(&db_tok.base_form).cloned().unwrap_or_default()
+                gloss_cache
+                    .get(&db_tok.base_form)
+                    .cloned()
+                    .unwrap_or_default()
             } else {
                 String::new()
             };
@@ -782,7 +1343,10 @@ fn build_sentences(
 
         // Flush last sentence
         if !current_tokens.is_empty() {
-            let text = current_tokens.iter().map(|t| t.surface.as_str()).collect::<String>();
+            let text = current_tokens
+                .iter()
+                .map(|t| t.surface.as_str())
+                .collect::<String>();
             sentences.push(SentenceData {
                 paragraph_idx: para_idx,
                 start_token,
@@ -800,11 +1364,19 @@ fn build_sentences(
 fn is_trivial_pos(pos: &str, surface: &str) -> bool {
     matches!(
         pos,
-        "Symbol" | "Punctuation" | "Whitespace" | "BOS/EOS" | ""
-            | "Particle" | "Auxiliary" | "Conjunction" | "Prefix" | "Suffix"
+        "Symbol"
+            | "Punctuation"
+            | "Whitespace"
+            | "BOS/EOS"
+            | ""
+            | "Particle"
+            | "Auxiliary"
+            | "Conjunction"
+            | "Prefix"
+            | "Suffix"
     ) || surface.trim().is_empty()
-      || is_numeric(surface)
-      || is_ascii_only(surface)
+        || is_numeric(surface)
+        || is_ascii_only(surface)
 }
 
 /// Check if a string is purely numeric.
@@ -832,13 +1404,13 @@ fn translate_conjugation_form(form: &str) -> String {
 
     let parts: Vec<&str> = form.splitn(2, '-').collect();
     let main = match parts[0] {
-        "未然形" => "irrealis",         // negative/volitional stem
-        "連用形" => "continuative",     // masu-stem / te-form stem
-        "終止形" => "terminal",         // dictionary/plain ending
-        "連体形" => "attributive",      // modifies noun
-        "仮定形" => "conditional",      // ba-conditional
-        "命令形" => "imperative",       // command form
-        "意志推量形" => "volitional",   // let's / probably
+        "未然形" => "irrealis",       // negative/volitional stem
+        "連用形" => "continuative",   // masu-stem / te-form stem
+        "終止形" => "terminal",       // dictionary/plain ending
+        "連体形" => "attributive",    // modifies noun
+        "仮定形" => "conditional",    // ba-conditional
+        "命令形" => "imperative",     // command form
+        "意志推量形" => "volitional", // let's / probably
         "語幹" => "stem",
         other => other,
     };
@@ -846,10 +1418,10 @@ fn translate_conjugation_form(form: &str) -> String {
     if parts.len() > 1 {
         let sub = match parts[1] {
             "一般" => "general",
-            "促音便" => "geminate",     // っ sound change (e.g. 食べたかった)
-            "撥音便" => "nasal",        // ん sound change (e.g. 読んだ)
-            "イ音便" => "i-onbin",      // い sound change (e.g. 書いた)
-            "ウ音便" => "u-onbin",      // う sound change
+            "促音便" => "geminate", // っ sound change (e.g. 食べたかった)
+            "撥音便" => "nasal",    // ん sound change (e.g. 読んだ)
+            "イ音便" => "i-onbin",  // い sound change (e.g. 書いた)
+            "ウ音便" => "u-onbin",  // う sound change
             "基本形" => "basic",
             "縮約形" => "contracted",
             other => other,
@@ -868,11 +1440,11 @@ fn translate_conjugation_type(ctype: &str) -> String {
 
     let parts: Vec<&str> = ctype.splitn(2, '-').collect();
     let main = match parts[0] {
-        "五段" => "godan",             // u-verbs
-        "上一段" => "ichidan-upper",    // ru-verbs (i-stem)
-        "下一段" => "ichidan-lower",    // ru-verbs (e-stem)
-        "カ行変格" => "ka-irregular",   // 来る
-        "サ行変格" => "sa-irregular",   // する
+        "五段" => "godan",            // u-verbs
+        "上一段" => "ichidan-upper",  // ru-verbs (i-stem)
+        "下一段" => "ichidan-lower",  // ru-verbs (e-stem)
+        "カ行変格" => "ka-irregular", // 来る
+        "サ行変格" => "sa-irregular", // する
         "形容詞" => "i-adjective",
         "助動詞" => "auxiliary",
         "文語" => "classical",
@@ -897,10 +1469,10 @@ fn translate_conjugation_type(ctype: &str) -> String {
             "タイ" => "tai",
             "ナイ" => "nai",
             "ヌ" => "nu",
-            "レル" => "reru",       // passive/potential
-            "ラレル" => "rareru",   // passive/potential (ichidan)
-            "セル" => "seru",       // causative
-            "サセル" => "saseru",   // causative (ichidan)
+            "レル" => "reru",     // passive/potential
+            "ラレル" => "rareru", // passive/potential (ichidan)
+            "セル" => "seru",     // causative
+            "サセル" => "saseru", // causative (ichidan)
             other => other,
         };
         format!("{} ({})", main, sub)

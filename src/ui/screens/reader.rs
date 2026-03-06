@@ -12,8 +12,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     let state = match app.reader_state.as_ref() {
         Some(s) => s,
         None => {
-            let msg = Paragraph::new("No text loaded. Use 'kotoba import <file>' then 'kotoba run'.")
-                .style(Style::default().fg(Color::DarkGray));
+            let msg =
+                Paragraph::new("No text loaded. Use 'kotoba import <file>' then 'kotoba run'.")
+                    .style(Style::default().fg(Color::DarkGray));
             frame.render_widget(msg, frame.size());
             return;
         }
@@ -24,14 +25,19 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Top bar
     let outer = Layout::vertical([
         Constraint::Length(1), // title bar
-        Constraint::Min(3),   // content
+        Constraint::Min(3),    // content
         Constraint::Length(1), // status bar
     ])
     .split(area);
 
     // Title bar
     let title = Line::from(vec![
-        Span::styled(" kotoba", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " kotoba",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" — "),
         Span::styled(&state.text_title, Style::default().fg(Color::White)),
         Span::raw("  "),
@@ -96,12 +102,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 }
 
 /// Render the main text area with all paragraphs and furigana.
-fn render_main_text(
-    frame: &mut Frame,
-    app: &App,
-    state: &crate::app::ReaderState,
-    area: Rect,
-) {
+fn render_main_text(frame: &mut Frame, app: &App, state: &crate::app::ReaderState, area: Rect) {
     let block = Block::default().borders(Borders::NONE);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -134,16 +135,24 @@ fn render_main_text(
             }
         }
         // Estimate height: furigana doubles line count, plus wrapping
-        let has_kanji_tokens = sentence.tokens.iter().any(|t| {
-            !t.is_trivial && !t.reading.is_empty() && t.surface != t.reading
-        });
-        let base_height: u16 = if show_furigana && has_kanji_tokens { 2 } else { 1 };
+        let has_kanji_tokens = sentence
+            .tokens
+            .iter()
+            .any(|t| !t.is_trivial && !t.reading.is_empty() && t.surface != t.reading);
+        let base_height: u16 = if show_furigana && has_kanji_tokens {
+            2
+        } else {
+            1
+        };
 
         // Estimate wrapping
-        let total_width: usize = sentence.tokens.iter().map(|t| {
-            unicode_width::UnicodeWidthStr::width(t.surface.as_str())
-        }).sum();
-        let line_count = ((total_width as u16).max(1) + inner.width.saturating_sub(3)) / inner.width.max(1);
+        let total_width: usize = sentence
+            .tokens
+            .iter()
+            .map(|t| unicode_width::UnicodeWidthStr::width(t.surface.as_str()))
+            .sum();
+        let line_count =
+            ((total_width as u16).max(1) + inner.width.saturating_sub(3)) / inner.width.max(1);
         h += line_count.max(1) * base_height;
 
         sentence_heights.push(h);
@@ -211,13 +220,7 @@ fn render_main_text(
             };
 
             let is_current = sent_idx == state.sentence_index;
-            furigana::render_sentence(
-                &display_tokens,
-                render_area,
-                buf,
-                show_furigana,
-                is_current,
-            );
+            furigana::render_sentence(&display_tokens, render_area, buf, show_furigana, is_current);
         }
 
         y_pos += h as i32;

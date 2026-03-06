@@ -130,12 +130,18 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled("Global:", Style::default().add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(
+                    "Global:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
                 Line::from("  q / Ctrl+C  — Quit"),
                 Line::from("  Tab         — Cycle screens"),
                 Line::from("  ?           — Toggle this help"),
                 Line::from(""),
-                Line::from(Span::styled("Reader:", Style::default().add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(
+                    "Reader:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
                 Line::from("  ↑/k         — Previous sentence"),
                 Line::from("  ↓/j         — Next sentence"),
                 Line::from("  ←/h         — Previous word"),
@@ -147,7 +153,10 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from("  n           — Edit word note"),
                 Line::from("  Esc         — Deselect word / back to Library"),
                 Line::from(""),
-                Line::from(Span::styled("Library:", Style::default().add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(
+                    "Library:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
                 Line::from("  ↑/↓         — Navigate texts"),
                 Line::from("  Enter       — Open text in Reader"),
                 Line::from("  d           — Delete selected text"),
@@ -246,6 +255,38 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
             let block = Block::default()
                 .title(" Confirm Delete ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+
+        PopupState::DeleteSourceConfirm { title, .. } => {
+            let area = centered_rect(55, 25, frame.size());
+            frame.render_widget(Clear, area);
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Delete this source?",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    title.as_str(),
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from(""),
+                Line::from("This will delete the source, all chapters,"),
+                Line::from("and all imported chapter texts."),
+                Line::from(""),
+                Line::from("  y — Yes, delete"),
+                Line::from("  n — No, cancel"),
+            ];
+
+            let block = Block::default()
+                .title(" Confirm Delete Source ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Red));
 

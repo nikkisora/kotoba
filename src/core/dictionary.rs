@@ -88,10 +88,7 @@ fn download_with_progress(url: &str, dest: &Path) -> Result<()> {
     }
 
     let size = std::fs::metadata(dest)?.len();
-    println!(
-        "Downloaded {:.1} MB",
-        size as f64 / 1_048_576.0,
-    );
+    println!("Downloaded {:.1} MB", size as f64 / 1_048_576.0,);
 
     Ok(())
 }
@@ -105,7 +102,9 @@ fn decompress_gz(gz_path: &Path, dest: &Path) -> Result<()> {
     let pb = ProgressBar::new(gz_size);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} decompressing...")
+            .template(
+                "[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} decompressing...",
+            )
             .unwrap()
             .progress_chars("██░"),
     );
@@ -238,7 +237,13 @@ pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(anyhow::anyhow!("XML parse error at position {}: {:?}", reader.buffer_position(), e)),
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "XML parse error at position {}: {:?}",
+                    reader.buffer_position(),
+                    e
+                ))
+            }
             _ => {}
         }
     }
@@ -285,7 +290,7 @@ pub fn lookup(conn: &Connection, base_form: &str, reading: Option<&str>) -> Resu
     let mut stmt = conn.prepare(
         "SELECT e.json_blob FROM jmdict_entries e
          JOIN jmdict_kanji k ON k.entry_id = e.ent_seq
-         WHERE k.kanji_element = ?1"
+         WHERE k.kanji_element = ?1",
     )?;
 
     let rows = stmt.query_map(params![base_form], |row| {
@@ -313,7 +318,7 @@ pub fn lookup(conn: &Connection, base_form: &str, reading: Option<&str>) -> Resu
         let mut stmt = conn.prepare(
             "SELECT e.json_blob FROM jmdict_entries e
              JOIN jmdict_readings r ON r.entry_id = e.ent_seq
-             WHERE r.reading_element = ?1"
+             WHERE r.reading_element = ?1",
         )?;
 
         let rows = stmt.query_map(params![base_form], |row| {

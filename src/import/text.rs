@@ -32,13 +32,16 @@ pub fn import_text(
 ) -> Result<i64> {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
-        ProgressStyle::with_template("{spinner:.cyan} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} paragraphs — {msg}")
-            .unwrap()
-            .progress_chars("█▉▊▋▌▍▎▏  "),
+        ProgressStyle::with_template(
+            "{spinner:.cyan} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} paragraphs — {msg}",
+        )
+        .unwrap()
+        .progress_chars("█▉▊▋▌▍▎▏  "),
     );
     pb.set_message(format!("Importing \"{}\"...", title));
 
-    let result = import_text_with_progress(title, content, source_type, source_url, conn, Some(&pb));
+    let result =
+        import_text_with_progress(title, content, source_type, source_url, conn, Some(&pb));
 
     match &result {
         Ok(_) => pb.finish_with_message(format!("\"{}\" imported successfully", title)),
@@ -153,12 +156,16 @@ fn import_text_inner(
                         token_info.pos.as_str(),
                         "Particle" | "Auxiliary" | "Conjunction" | "Prefix" | "Suffix"
                     ) || is_numeric
-                      || is_ascii;
+                        || is_ascii;
                     if auto_ignore {
                         // Only set to Ignored if still New (don't override user choices)
                         if let Ok(Some(vocab)) = models::get_vocabulary_by_id(conn, vocab_id) {
                             if vocab.status == models::VocabularyStatus::New {
-                                models::update_vocabulary_status(conn, vocab_id, models::VocabularyStatus::Ignored)?;
+                                models::update_vocabulary_status(
+                                    conn,
+                                    vocab_id,
+                                    models::VocabularyStatus::Ignored,
+                                )?;
                             }
                         }
                     }
@@ -193,14 +200,158 @@ fn import_text_inner(
         }
     }
 
-    if progress.is_none() {
-        println!(
-            "  Paragraphs: {}, Tokens: {}, Vocabulary entries: {}",
-            para_count, total_tokens, new_vocab
-        );
-    }
+    // Note: don't println here — it corrupts the TUI. CLI callers use
+    // import_text() which has its own progress bar with finish message.
 
     Ok(text_id)
+}
+
+/// Pre-tokenized paragraph data for two-phase import.
+pub struct PreTokenizedParagraph {
+    pub position: i32,
+    pub content: String,
+    pub sentences: Vec<PreTokenizedSentence>,
+}
+
+/// Pre-tokenized sentence data.
+pub struct PreTokenizedSentence {
+    pub sentence_index: i32,
+    pub tokens: Vec<tokenizer::TokenInfo>,
+}
+
+/// Phase 1: Tokenize text in memory without any DB access.
+/// Returns pre-tokenized data that can be written to DB later.
+/// This is safe to call from multiple threads simultaneously.
+pub fn pretokenize_text(content: &str) -> Result<Vec<PreTokenizedParagraph>> {
+    pretokenize_text_with_progress(content, &|_, _| {})
+}
+
+/// Phase 1 with progress callback: `on_progress(paragraphs_done, paragraphs_total)`.
+pub fn pretokenize_text_with_progress(
+    content: &str,
+    on_progress: &dyn Fn(usize, usize),
+) -> Result<Vec<PreTokenizedParagraph>> {
+    let paragraphs = tokenizer::split_paragraphs(content);
+    let total = paragraphs.len();
+    let mut result = Vec::with_capacity(total);
+
+    for (para_idx, para_text) in paragraphs.iter().enumerate() {
+        let sentences_text = tokenizer::split_sentences(para_text);
+        let mut sentences = Vec::with_capacity(sentences_text.len());
+
+        for (sent_idx, sentence) in sentences_text.iter().enumerate() {
+            let tokens = tokenizer::tokenize_sentence(sentence)?;
+            sentences.push(PreTokenizedSentence {
+                sentence_index: sent_idx as i32,
+                tokens,
+            });
+        }
+
+        result.push(PreTokenizedParagraph {
+            position: para_idx as i32,
+            content: para_text.clone(),
+            sentences,
+        });
+
+        on_progress(para_idx + 1, total);
+    }
+
+    Ok(result)
+}
+
+/// Phase 2: Write pre-tokenized data to DB in a single short transaction.
+/// This holds the DB write lock only for the insert phase (no tokenization).
+pub fn write_pretokenized(
+    title: &str,
+    content: &str,
+    source_type: &str,
+    source_url: Option<&str>,
+    paragraphs: &[PreTokenizedParagraph],
+    conn: &Connection,
+) -> Result<i64> {
+    conn.execute_batch("BEGIN TRANSACTION;")?;
+
+    let result = (|| -> Result<i64> {
+        let text_id = models::insert_text(conn, title, content, source_type, source_url)?;
+
+        for para in paragraphs {
+            let para_id = models::insert_paragraph(conn, text_id, para.position, &para.content)?;
+            let mut token_position = 0i32;
+
+            for sentence in &para.sentences {
+                for token_info in &sentence.tokens {
+                    models::insert_token(
+                        conn,
+                        para_id,
+                        token_position,
+                        &token_info.surface,
+                        &token_info.base_form,
+                        &token_info.reading,
+                        &token_info.surface_reading,
+                        &token_info.pos,
+                        &token_info.conjugation_form,
+                        &token_info.conjugation_type,
+                        sentence.sentence_index,
+                    )?;
+                    token_position += 1;
+
+                    if !token_info.is_trivial() && !token_info.base_form.is_empty() {
+                        let vocab_id = models::upsert_vocabulary(
+                            conn,
+                            &token_info.base_form,
+                            &token_info.reading,
+                            &token_info.pos,
+                        )?;
+
+                        let is_numeric = token_info.surface.trim().chars().all(|c| {
+                            c.is_ascii_digit() || c == '.' || c == ',' || ('０'..='９').contains(&c)
+                        }) && !token_info.surface.trim().is_empty();
+                        let is_ascii = !token_info.surface.trim().is_empty()
+                            && token_info.surface.trim().chars().all(|c| c.is_ascii());
+                        let auto_ignore = matches!(
+                            token_info.pos.as_str(),
+                            "Particle" | "Auxiliary" | "Conjunction" | "Prefix" | "Suffix"
+                        ) || is_numeric
+                            || is_ascii;
+                        if auto_ignore {
+                            if let Ok(Some(vocab)) = models::get_vocabulary_by_id(conn, vocab_id) {
+                                if vocab.status == models::VocabularyStatus::New {
+                                    models::update_vocabulary_status(
+                                        conn,
+                                        vocab_id,
+                                        models::VocabularyStatus::Ignored,
+                                    )?;
+                                }
+                            }
+                        }
+
+                        if token_info.surface != token_info.base_form {
+                            models::upsert_conjugation_encounter(
+                                conn,
+                                vocab_id,
+                                &token_info.surface,
+                                &token_info.conjugation_form,
+                                &token_info.conjugation_type,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(text_id)
+    })();
+
+    match result {
+        Ok(text_id) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(text_id)
+        }
+        Err(e) => {
+            conn.execute_batch("ROLLBACK;").ok();
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]

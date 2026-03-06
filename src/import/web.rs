@@ -58,7 +58,8 @@ fn fetch_html(url: &str) -> Result<String> {
         .and_then(|v: &reqwest::header::HeaderValue| v.to_str().ok())
         .unwrap_or("");
 
-    if !content_type.is_empty() && !content_type.contains("html") && !content_type.contains("text/") {
+    if !content_type.is_empty() && !content_type.contains("html") && !content_type.contains("text/")
+    {
         anyhow::bail!("URL returned non-HTML content: {}", content_type);
     }
 
@@ -82,11 +83,11 @@ fn extract_article(html: &str, _url: &str) -> Result<(String, String)> {
         ".article-body",
         ".post-content",
         ".content",
-        ".p-novel__body",   // Syosetu novel body (new layout)
-        "#novel_honbun",    // Syosetu novel body (legacy)
-        "#novel_p",         // Syosetu preface (legacy)
-        "#novel_a",         // Syosetu afterword (legacy)
-        ".novel_view",      // Alternative syosetu
+        ".p-novel__body", // Syosetu novel body (new layout)
+        "#novel_honbun",  // Syosetu novel body (legacy)
+        "#novel_p",       // Syosetu preface (legacy)
+        "#novel_a",       // Syosetu afterword (legacy)
+        ".novel_view",    // Alternative syosetu
     ];
 
     for selector_str in &article_selectors {

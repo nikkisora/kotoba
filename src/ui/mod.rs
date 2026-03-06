@@ -2,18 +2,24 @@ pub mod components;
 pub mod events;
 pub mod screens;
 
+use ratatui::widgets::Clear;
 use ratatui::Frame;
 
 use crate::app::{App, Screen};
 
 /// Main render function that dispatches to the active screen.
 pub fn render(frame: &mut Frame, app: &App) {
-    match app.screen {
+    // Clear the entire frame first to prevent artifacts from previous screens.
+    frame.render_widget(Clear, frame.size());
+
+    match &app.screen {
+        Screen::Home => screens::home::render(frame, app),
         Screen::Library => screens::library::render(frame, app),
+        Screen::ChapterSelect { .. } => screens::chapter_select::render(frame, app),
         Screen::Reader => screens::reader::render(frame, app),
-        Screen::Syosetu => screens::syosetu::render(frame, app),
-        Screen::Review => screens::placeholder::render(frame, "Review", "SRS review mode — coming in Phase 4"),
-        Screen::Stats => screens::placeholder::render(frame, "Stats", "Statistics — coming in Phase 6"),
+        Screen::Review => {
+            screens::placeholder::render(frame, "Review", "SRS review mode — coming in Phase 4")
+        }
     }
 
     // Render popup overlay if any

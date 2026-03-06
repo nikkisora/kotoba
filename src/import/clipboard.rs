@@ -6,12 +6,11 @@ use super::text;
 /// Import text from the system clipboard.
 /// Returns the text_id of the imported text.
 pub fn import_clipboard(conn: &Connection) -> Result<i64> {
-    let mut clipboard = arboard::Clipboard::new()
-        .context("Failed to access clipboard")?;
+    let mut clipboard = arboard::Clipboard::new().context("Failed to access clipboard")?;
 
-    let content = clipboard
-        .get_text()
-        .context("Failed to read text from clipboard (clipboard may be empty or contain non-text data)")?;
+    let content = clipboard.get_text().context(
+        "Failed to read text from clipboard (clipboard may be empty or contain non-text data)",
+    )?;
 
     if content.trim().is_empty() {
         anyhow::bail!("Clipboard is empty or contains only whitespace");
@@ -22,7 +21,11 @@ pub fn import_clipboard(conn: &Connection) -> Result<i64> {
 
     // Show preview
     let preview: String = content.chars().take(200).collect();
-    let ellipsis = if content.chars().count() > 200 { "..." } else { "" };
+    let ellipsis = if content.chars().count() > 200 {
+        "..."
+    } else {
+        ""
+    };
     println!("Clipboard preview:");
     println!("──────────────────────────────────────");
     println!("{}{}", preview, ellipsis);
@@ -36,8 +39,7 @@ pub fn import_clipboard(conn: &Connection) -> Result<i64> {
 
 /// Import clipboard text without interactive output (for TUI use).
 pub fn import_clipboard_quiet(conn: &Connection) -> Result<(i64, String)> {
-    let mut clipboard = arboard::Clipboard::new()
-        .context("Failed to access clipboard")?;
+    let mut clipboard = arboard::Clipboard::new().context("Failed to access clipboard")?;
 
     let content = clipboard
         .get_text()
@@ -54,8 +56,7 @@ pub fn import_clipboard_quiet(conn: &Connection) -> Result<(i64, String)> {
 
 /// Get a preview of the clipboard content without importing.
 pub fn get_clipboard_preview() -> Result<(String, usize)> {
-    let mut clipboard = arboard::Clipboard::new()
-        .context("Failed to access clipboard")?;
+    let mut clipboard = arboard::Clipboard::new().context("Failed to access clipboard")?;
 
     let content = clipboard
         .get_text()

@@ -23,6 +23,9 @@ pub struct SyosetuChapter {
     pub title: String,
     pub text_id: Option<i64>,
     pub word_count: usize,
+    /// Group/arc name this chapter belongs to (from `<div class="p-eplist__chapter-title">`).
+    #[serde(default)]
+    pub group: String,
 }
 
 /// Extract the ncode from a Syosetu URL.
@@ -52,7 +55,145 @@ pub fn parse_ncode(input: &str) -> Result<String> {
     anyhow::bail!("Could not parse ncode from: {}", input)
 }
 
+/// Result of fetching a single ToC page from Syosetu.
+pub struct SyosetuPageResult {
+    pub title: String,
+    pub author: String,
+    pub chapters: Vec<SyosetuChapter>,
+    pub has_next_page: bool,
+}
+
+/// Fetch a single page of the Syosetu novel table of contents.
+/// Returns the chapters found on that page along with their group names,
+/// plus whether there is a next page.
+pub fn fetch_novel_page(
+    client: &reqwest::blocking::Client,
+    ncode: &str,
+    page: usize,
+    chapter_offset: usize,
+) -> Result<SyosetuPageResult> {
+    let toc_url = if page == 1 {
+        format!("https://ncode.syosetu.com/{}/", ncode)
+    } else {
+        format!("https://ncode.syosetu.com/{}/?p={}", ncode, page)
+    };
+
+    let html = client
+        .get(&toc_url)
+        .send()
+        .with_context(|| format!("Failed to fetch {}", toc_url))?
+        .text()
+        .context("Failed to read response")?;
+
+    let document = Html::parse_document(&html);
+
+    // Extract title and author (meaningful on page 1, but always available)
+    let title = try_select_text(&document, &[".p-novel__title", ".novel_title"])
+        .unwrap_or_else(|| format!("Novel {}", ncode));
+    let author = try_select_text(&document, &[".p-novel__author a", ".novel_writername a"])
+        .unwrap_or_default();
+
+    let mut chapters: Vec<SyosetuChapter> = Vec::new();
+
+    // New layout: walk the episode list and track chapter-title (group) headers.
+    // The structure is: .p-eplist contains .p-eplist__chapter-title divs
+    // interspersed with .p-eplist__subtitle links.
+    let mut found_new_layout = false;
+    if let (Ok(chapter_title_sel), Ok(subtitle_sel)) = (
+        Selector::parse(".p-eplist__chapter-title"),
+        Selector::parse(".p-eplist__subtitle"),
+    ) {
+        // Collect all chapter-title and subtitle elements in document order
+        // by walking the eplist container.
+        if let Ok(eplist_sel) = Selector::parse(".p-eplist") {
+            if let Some(eplist) = document.select(&eplist_sel).next() {
+                let mut current_group = String::new();
+                // Walk direct children of the eplist
+                for child in eplist.children() {
+                    if let Some(elem_ref) = scraper::ElementRef::wrap(child) {
+                        // Check if this is a chapter-title (group header)
+                        if chapter_title_sel.matches(&elem_ref) {
+                            current_group = elem_ref.text().collect::<String>().trim().to_string();
+                        }
+                        // Check if this is a subtitle (chapter entry) — or contains one
+                        if subtitle_sel.matches(&elem_ref) {
+                            let chapter_title =
+                                elem_ref.text().collect::<String>().trim().to_string();
+                            if !chapter_title.is_empty() {
+                                found_new_layout = true;
+                                chapters.push(SyosetuChapter {
+                                    number: chapter_offset + chapters.len() + 1,
+                                    title: chapter_title,
+                                    text_id: None,
+                                    word_count: 0,
+                                    group: current_group.clone(),
+                                });
+                            }
+                        }
+                        // Also check children (the subtitle might be nested in a sublist)
+                        for sub in elem_ref.select(&subtitle_sel) {
+                            if !subtitle_sel.matches(&elem_ref) {
+                                let chapter_title =
+                                    sub.text().collect::<String>().trim().to_string();
+                                if !chapter_title.is_empty() {
+                                    found_new_layout = true;
+                                    chapters.push(SyosetuChapter {
+                                        number: chapter_offset + chapters.len() + 1,
+                                        title: chapter_title,
+                                        text_id: None,
+                                        word_count: 0,
+                                        group: current_group.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Legacy layout fallback: .subtitle a
+    if !found_new_layout {
+        if let Ok(sel) = Selector::parse(".subtitle a") {
+            for elem in document.select(&sel) {
+                let chapter_title = elem.text().collect::<String>().trim().to_string();
+                if !chapter_title.is_empty() {
+                    chapters.push(SyosetuChapter {
+                        number: chapter_offset + chapters.len() + 1,
+                        title: chapter_title,
+                        text_id: None,
+                        word_count: 0,
+                        group: String::new(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Check if there's a next page
+    let has_next = if let Ok(sel) = Selector::parse(".c-pager__item--next") {
+        document
+            .select(&sel)
+            .next()
+            .map(|e| e.value().name() == "a")
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    let has_next_page = has_next && !chapters.is_empty();
+    Ok(SyosetuPageResult {
+        title,
+        author,
+        chapters,
+        has_next_page,
+    })
+}
+
 /// Fetch novel metadata (title, author, chapter list) from Syosetu.
+/// Fetches all pages synchronously. For incremental loading, use
+/// `fetch_novel_page` in a loop instead.
 pub fn fetch_novel_info(ncode: &str) -> Result<SyosetuNovel> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -65,79 +206,18 @@ pub fn fetch_novel_info(ncode: &str) -> Result<SyosetuNovel> {
     let mut page = 1;
 
     loop {
-        let toc_url = if page == 1 {
-            format!("https://ncode.syosetu.com/{}/", ncode)
-        } else {
-            format!("https://ncode.syosetu.com/{}/?p={}", ncode, page)
-        };
+        let result = fetch_novel_page(&client, ncode, page, all_chapters.len())?;
 
-        let html = client
-            .get(&toc_url)
-            .send()
-            .with_context(|| format!("Failed to fetch {}", toc_url))?
-            .text()
-            .context("Failed to read response")?;
-
-        let document = Html::parse_document(&html);
-
-        // Extract title and author from the first page only
         if page == 1 {
-            // Try new layout first, then legacy
-            title = try_select_text(&document, &[".p-novel__title", ".novel_title"])
-                .unwrap_or_else(|| format!("Novel {}", ncode));
-
-            author = try_select_text(&document, &[".p-novel__author a", ".novel_writername a"])
-                .unwrap_or_default();
+            title = result.title;
+            author = result.author;
         }
 
-        // Extract chapters — try new layout selectors, then legacy
-        let chapter_count_before = all_chapters.len();
+        let got_chapters = !result.chapters.is_empty();
+        all_chapters.extend(result.chapters);
 
-        // New layout: .p-eplist__subtitle links
-        if let Ok(sel) = Selector::parse(".p-eplist__subtitle") {
-            for elem in document.select(&sel) {
-                let chapter_title = elem.text().collect::<String>().trim().to_string();
-                if !chapter_title.is_empty() {
-                    all_chapters.push(SyosetuChapter {
-                        number: all_chapters.len() + 1,
-                        title: chapter_title,
-                        text_id: None,
-                        word_count: 0,
-                    });
-                }
-            }
-        }
-
-        // Legacy layout fallback: .subtitle a
-        if all_chapters.len() == chapter_count_before {
-            if let Ok(sel) = Selector::parse(".subtitle a") {
-                for elem in document.select(&sel) {
-                    let chapter_title = elem.text().collect::<String>().trim().to_string();
-                    if !chapter_title.is_empty() {
-                        all_chapters.push(SyosetuChapter {
-                            number: all_chapters.len() + 1,
-                            title: chapter_title,
-                            text_id: None,
-                            word_count: 0,
-                        });
-                    }
-                }
-            }
-        }
-
-        // Check if there's a next page
-        let has_next = if let Ok(sel) = Selector::parse(".c-pager__item--next") {
-            // Only follow if it's an <a> tag (not a <span>)
-            document.select(&sel).next()
-                .map(|e| e.value().name() == "a")
-                .unwrap_or(false)
-        } else {
-            false
-        };
-
-        if has_next && all_chapters.len() > chapter_count_before {
+        if result.has_next_page && got_chapters {
             page += 1;
-            // Be polite to the server
             std::thread::sleep(std::time::Duration::from_millis(500));
         } else {
             break;
@@ -156,6 +236,7 @@ pub fn fetch_novel_info(ncode: &str) -> Result<SyosetuNovel> {
                     title: title.clone(),
                     text_id: None,
                     word_count: 0,
+                    group: String::new(),
                 });
             }
         }
@@ -227,8 +308,42 @@ pub fn import_chapter(ncode: &str, chapter: usize, conn: &Connection) -> Result<
     text::import_text(&title, &content, "syosetu", Some(&url), conn)
 }
 
+/// Fetch chapter content without any DB access (for two-phase background import).
+/// Returns (title, content, url).
+pub fn fetch_chapter_content(ncode: &str, chapter: usize) -> Result<(String, String, String)> {
+    let url = if chapter == 0 {
+        format!("https://ncode.syosetu.com/{}/", ncode)
+    } else {
+        format!("https://ncode.syosetu.com/{}/{}/", ncode, chapter)
+    };
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("Mozilla/5.0 (compatible; kotoba/0.1)")
+        .build()?;
+
+    let html = client.get(&url).send()?.text()?;
+    let document = Html::parse_document(&html);
+
+    let chapter_title = try_select_text(&document, &[".p-novel__subtitle", ".novel_subtitle"])
+        .unwrap_or_else(|| format!("Chapter {}", chapter));
+
+    let content = extract_chapter_content(&document)?;
+
+    if content.trim().is_empty() {
+        anyhow::bail!("Could not extract chapter text");
+    }
+
+    let title = format!("{} — Ch.{}", chapter_title, chapter);
+    Ok((title, content, url))
+}
+
 /// Import a chapter quietly (for TUI use).
-pub fn import_chapter_quiet(ncode: &str, chapter: usize, conn: &Connection) -> Result<(i64, String)> {
+pub fn import_chapter_quiet(
+    ncode: &str,
+    chapter: usize,
+    conn: &Connection,
+) -> Result<(i64, String)> {
     let url = if chapter == 0 {
         format!("https://ncode.syosetu.com/{}/", ncode)
     } else {
@@ -260,13 +375,7 @@ pub fn import_chapter_quiet(ncode: &str, chapter: usize, conn: &Connection) -> R
 /// Store novel metadata in the web_sources table.
 pub fn save_novel_metadata(novel: &SyosetuNovel, conn: &Connection) -> Result<i64> {
     let metadata = serde_json::to_string(novel)?;
-    let ws_id = models::upsert_web_source(
-        conn,
-        "syosetu",
-        &novel.ncode,
-        &novel.title,
-        &metadata,
-    )?;
+    let ws_id = models::upsert_web_source(conn, "syosetu", &novel.ncode, &novel.title, &metadata)?;
 
     // Upsert chapters
     for ch in &novel.chapters {
@@ -277,6 +386,39 @@ pub fn save_novel_metadata(novel: &SyosetuNovel, conn: &Connection) -> Result<i6
             &ch.title,
             ch.text_id,
             ch.word_count as i32,
+            &ch.group,
+        )?;
+    }
+
+    Ok(ws_id)
+}
+
+/// Save a single page of chapters to the DB. Used for incremental loading.
+/// Creates/updates the web_source row and inserts chapters from this page.
+pub fn save_novel_metadata_page(
+    ncode: &str,
+    title: &str,
+    author: &str,
+    chapters: &[SyosetuChapter],
+    conn: &Connection,
+) -> Result<i64> {
+    // Build a minimal metadata JSON for the web_source row
+    let metadata = serde_json::json!({
+        "ncode": ncode,
+        "title": title,
+        "author": author,
+    });
+    let ws_id = models::upsert_web_source(conn, "syosetu", ncode, title, &metadata.to_string())?;
+
+    for ch in chapters {
+        models::insert_web_source_chapter(
+            conn,
+            ws_id,
+            ch.number as i32,
+            &ch.title,
+            ch.text_id,
+            ch.word_count as i32,
+            &ch.group,
         )?;
     }
 

@@ -33,7 +33,10 @@ pub fn import_subtitle(path: &Path, conn: &Connection) -> Result<i64> {
         anyhow::bail!("No text content found in subtitle file");
     }
 
-    println!("Extracted {} characters from subtitle", extracted.chars().count());
+    println!(
+        "Extracted {} characters from subtitle",
+        extracted.chars().count()
+    );
 
     text::import_text(&title, &extracted, "subtitle", None, conn)
 }
@@ -72,8 +75,8 @@ pub fn import_subtitle_quiet(path: &Path, conn: &Connection) -> Result<(i64, Str
 /// Parse an SRT subtitle file and extract text content.
 /// Groups subtitle blocks into paragraphs based on timing gaps.
 fn parse_srt(content: &str) -> Result<String> {
-    let timing_re = Regex::new(r"^\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}")
-        .unwrap();
+    let timing_re =
+        Regex::new(r"^\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}").unwrap();
     let index_re = Regex::new(r"^\d+$").unwrap();
     let html_tag_re = Regex::new(r"<[^>]+>").unwrap();
 

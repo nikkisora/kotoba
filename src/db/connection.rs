@@ -18,6 +18,8 @@ pub fn open_or_create(path: &Path) -> Result<Connection> {
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     // Enable foreign keys
     conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+    // Set busy timeout so concurrent writers retry instead of failing immediately
+    conn.execute_batch("PRAGMA busy_timeout=5000;")?;
 
     Ok(conn)
 }

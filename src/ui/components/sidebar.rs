@@ -25,7 +25,9 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
             " Sentence Details ",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ));
 
     let inner = block.inner(area);
@@ -40,7 +42,9 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
     // Current sentence text
     lines.push(Line::from(Span::styled(
         "Current Sentence:",
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(Span::raw(&sentence.text)));
     lines.push(Line::from(""));
@@ -48,7 +52,9 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
     // Separator
     lines.push(Line::from(Span::styled(
         "Words:",
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
     )));
 
     // Word list
@@ -100,7 +106,9 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         );
 
         let style = if is_selected {
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Cyan)
         } else {
             Style::default()
         };
@@ -111,9 +119,30 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
     // Stats at bottom
     lines.push(Line::from(""));
     let _total = sentence.tokens.iter().filter(|t| !t.is_trivial).count();
-    let new_count = sentence.tokens.iter().filter(|t| !t.is_trivial && t.vocabulary_status == VocabularyStatus::New).count();
-    let learning = sentence.tokens.iter().filter(|t| !t.is_trivial && matches!(t.vocabulary_status, VocabularyStatus::Learning1 | VocabularyStatus::Learning2 | VocabularyStatus::Learning3 | VocabularyStatus::Learning4)).count();
-    let known = sentence.tokens.iter().filter(|t| !t.is_trivial && t.vocabulary_status == VocabularyStatus::Known).count();
+    let new_count = sentence
+        .tokens
+        .iter()
+        .filter(|t| !t.is_trivial && t.vocabulary_status == VocabularyStatus::New)
+        .count();
+    let learning = sentence
+        .tokens
+        .iter()
+        .filter(|t| {
+            !t.is_trivial
+                && matches!(
+                    t.vocabulary_status,
+                    VocabularyStatus::Learning1
+                        | VocabularyStatus::Learning2
+                        | VocabularyStatus::Learning3
+                        | VocabularyStatus::Learning4
+                )
+        })
+        .count();
+    let known = sentence
+        .tokens
+        .iter()
+        .filter(|t| !t.is_trivial && t.vocabulary_status == VocabularyStatus::Known)
+        .count();
 
     lines.push(Line::from(vec![
         Span::styled("New: ", Style::default().fg(Color::Blue)),

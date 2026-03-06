@@ -19,11 +19,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use app::{App, PopupState, Screen};
-use db::models::VocabularyStatus;
+use db::models::{self, VocabularyStatus};
 use ui::events::{Event, EventLoop};
 
 #[derive(Parser)]
-#[command(name = "kotoba", version, about = "Terminal-based Japanese language learning app")]
+#[command(
+    name = "kotoba",
+    version,
+    about = "Terminal-based Japanese language learning app"
+)]
 struct Cli {
     /// Path to config file
     #[arg(long, global = true)]
@@ -87,7 +91,11 @@ fn main() -> Result<()> {
     db::schema::run_migrations(&conn)?;
 
     match cli.command {
-        Commands::Import { file, clipboard, url } => {
+        Commands::Import {
+            file,
+            clipboard,
+            url,
+        } => {
             if clipboard {
                 let text_id = import::clipboard::import_clipboard(&conn)?;
                 println!("Imported clipboard text with id: {text_id}");
@@ -96,7 +104,8 @@ fn main() -> Result<()> {
                 println!("Imported web content with id: {text_id}");
             } else if let Some(file) = file {
                 // Auto-detect format by extension
-                let ext = file.extension()
+                let ext = file
+                    .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_lowercase();
@@ -133,7 +142,12 @@ fn main() -> Result<()> {
             for t in &tokens {
                 println!(
                     "{:<20} {:<20} {:<15} {:<15} {:<20} {:<20}",
-                    t.surface, t.base_form, t.reading, t.pos, t.conjugation_form, t.conjugation_type
+                    t.surface,
+                    t.base_form,
+                    t.reading,
+                    t.pos,
+                    t.conjugation_form,
+                    t.conjugation_type
                 );
             }
         }
@@ -182,7 +196,10 @@ fn main() -> Result<()> {
                     println!("  {:>4}. {}", ch.number, ch.title);
                 }
                 println!();
-                println!("Import a chapter with: kotoba syosetu {} --chapter <N>", ncode);
+                println!(
+                    "Import a chapter with: kotoba syosetu {} --chapter <N>",
+                    ncode
+                );
             }
         }
         Commands::Run => {
@@ -216,12 +233,15 @@ fn run_tui(config: config::AppConfig) -> Result<()> {
 
     let mut app = App::new(config);
 
-    // Load library on start
-    if let Err(e) = app.refresh_library() {
-        app.set_message(format!("Error loading library: {}", e));
+    // Load home screen on start
+    if let Err(e) = app.refresh_home() {
+        app.set_message(format!("Error loading home: {}", e));
     }
 
     let events = EventLoop::new(Duration::from_millis(60));
+
+    // Initialize background importer with event sender
+    app.init_background_importer(events.sender());
 
     // Main event loop
     loop {
@@ -236,6 +256,9 @@ fn run_tui(config: config::AppConfig) -> Result<()> {
             }
             Event::Resize(_, _) => {}
             Event::Mouse(_) => {}
+            Event::Import(evt) => {
+                app.handle_import_event(evt);
+            }
         }
 
         if app.should_quit {
@@ -275,13 +298,41 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             return;
         }
         KeyCode::Tab => {
-            // Save reading progress before leaving reader
+            // Tab toggles between Reader <-> non-Reader
             if app.screen == Screen::Reader {
+                // Go back to previous screen
                 let _ = app.save_reading_progress();
-            }
-            app.screen = app.screen.next();
-            if app.screen == Screen::Library {
-                let _ = app.refresh_library();
+                let target = app.previous_screen.take().unwrap_or(Screen::Home);
+                app.screen = target.clone();
+                match &target {
+                    Screen::Library => {
+                        let _ = app.refresh_library();
+                    }
+                    Screen::Home => {
+                        let _ = app.refresh_home();
+                    }
+                    Screen::ChapterSelect { source_id } => {
+                        let sid = *source_id;
+                        let _ = app.load_chapter_select(sid);
+                    }
+                    _ => {}
+                }
+            } else {
+                // From any non-Reader screen: open most recently read text
+                let conn = match app.open_db() {
+                    Ok(c) => c,
+                    Err(_) => return,
+                };
+                let recent = models::list_recent_texts(&conn, 1).unwrap_or_default();
+                if let Some(text) = recent.first() {
+                    let text_id = text.id;
+                    app.previous_screen = Some(app.screen.clone());
+                    if let Err(e) = app.load_text(text_id) {
+                        app.set_message(format!("Error: {}", e));
+                    }
+                } else {
+                    app.set_message("No texts read yet — import something first");
+                }
             }
             return;
         }
@@ -292,12 +343,15 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
         _ => {}
     }
 
-    match app.screen {
+    match &app.screen.clone() {
+        Screen::Home => handle_home_key(app, key),
         Screen::Library => handle_library_key(app, key),
+        Screen::ChapterSelect { source_id } => {
+            let sid = *source_id;
+            handle_chapter_select_key(app, key, sid);
+        }
         Screen::Reader => handle_reader_key(app, key),
-        Screen::Syosetu => handle_syosetu_key(app, key),
         Screen::Review => {}
-        Screen::Stats => {}
     }
 }
 
@@ -363,6 +417,25 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.popup = None,
             _ => {}
         },
+        PopupState::DeleteSourceConfirm { .. } => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(PopupState::DeleteSourceConfirm {
+                    source_id,
+                    ref title,
+                }) = app.popup
+                {
+                    let title = title.clone();
+                    if let Err(e) = app.delete_source(source_id) {
+                        app.set_message(format!("Error deleting: {}", e));
+                    } else {
+                        app.set_message(format!("Deleted source \"{}\"", title));
+                    }
+                }
+                app.popup = None;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.popup = None,
+            _ => {}
+        },
         PopupState::ImportMenu => match key.code {
             KeyCode::Esc => app.popup = None,
             KeyCode::Char('c') => {
@@ -373,13 +446,19 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
                 }
             }
             KeyCode::Char('u') => {
-                app.popup = Some(PopupState::UrlInput { text: String::new() });
+                app.popup = Some(PopupState::UrlInput {
+                    text: String::new(),
+                });
             }
             KeyCode::Char('f') => {
-                app.popup = Some(PopupState::FilePathInput { text: String::new() });
+                app.popup = Some(PopupState::FilePathInput {
+                    text: String::new(),
+                });
             }
             KeyCode::Char('s') => {
-                app.popup = Some(PopupState::SyosetuInput { text: String::new() });
+                app.popup = Some(PopupState::SyosetuInput {
+                    text: String::new(),
+                });
             }
             _ => {}
         },
@@ -484,6 +563,48 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
     }
 }
 
+fn handle_home_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut home) = app.home_state {
+                home.selected = home.selected.saturating_sub(1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut home) = app.home_state {
+                let max = home.recent_texts.len().saturating_sub(1);
+                home.selected = (home.selected + 1).min(max);
+            }
+        }
+        KeyCode::Enter => {
+            let text_id = app
+                .home_state
+                .as_ref()
+                .and_then(|h| h.recent_texts.get(h.selected))
+                .map(|t| t.id);
+            if let Some(id) = text_id {
+                app.previous_screen = Some(Screen::Home);
+                if let Err(e) = app.load_text(id) {
+                    app.set_message(format!("Error loading text: {}", e));
+                }
+            }
+        }
+        KeyCode::Char('l') => {
+            app.screen = Screen::Library;
+            if let Err(e) = app.refresh_library() {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+        KeyCode::Char('r') => {
+            app.screen = Screen::Review;
+        }
+        KeyCode::Char('i') => {
+            app.popup = Some(PopupState::ImportMenu);
+        }
+        _ => {}
+    }
+}
+
 fn handle_library_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
@@ -493,112 +614,230 @@ fn handle_library_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(ref mut lib) = app.library_state {
-                let max = lib.texts.len().saturating_sub(1);
+                let max = lib.items.len().saturating_sub(1);
                 lib.selected = (lib.selected + 1).min(max);
             }
         }
         KeyCode::Enter => {
-            let text_id = app
-                .library_state
-                .as_ref()
-                .and_then(|lib| lib.texts.get(lib.selected))
-                .map(|t| t.id);
-            if let Some(id) = text_id {
-                if let Err(e) = app.load_text(id) {
-                    app.set_message(format!("Error loading text: {}", e));
+            if let Some(ref lib) = app.library_state {
+                if let Some(item) = lib.items.get(lib.selected) {
+                    match item {
+                        app::LibraryItem::Text(t) => {
+                            let id = t.id;
+                            app.previous_screen = Some(Screen::Library);
+                            if let Err(e) = app.load_text(id) {
+                                app.set_message(format!("Error loading text: {}", e));
+                            }
+                        }
+                        app::LibraryItem::Source(ws) => {
+                            let sid = ws.id;
+                            if let Err(e) = app.load_chapter_select(sid) {
+                                app.set_message(format!("Error loading chapters: {}", e));
+                            }
+                        }
+                    }
                 }
             }
         }
         KeyCode::Char('d') => {
-            // Delete selected text (with confirmation)
+            // Delete selected item (with confirmation)
             if let Some(ref lib) = app.library_state {
-                if let Some(text) = lib.texts.get(lib.selected) {
-                    app.popup = Some(PopupState::DeleteConfirm {
-                        text_id: text.id,
-                        title: text.title.clone(),
-                    });
+                match lib.items.get(lib.selected) {
+                    Some(app::LibraryItem::Text(text)) => {
+                        app.popup = Some(PopupState::DeleteConfirm {
+                            text_id: text.id,
+                            title: text.title.clone(),
+                        });
+                    }
+                    Some(app::LibraryItem::Source(ws)) => {
+                        app.popup = Some(PopupState::DeleteSourceConfirm {
+                            source_id: ws.id,
+                            title: ws.title.clone(),
+                        });
+                    }
+                    None => {}
                 }
             }
         }
         KeyCode::Char('i') => {
-            // Import sub-menu
             app.popup = Some(PopupState::ImportMenu);
         }
         KeyCode::Char('/') => {
-            // Search
-            app.popup = Some(PopupState::SearchInput { text: String::new() });
+            app.popup = Some(PopupState::SearchInput {
+                text: String::new(),
+            });
         }
         KeyCode::Char('s') => {
-            // Cycle sort mode
             if let Err(e) = app.cycle_library_sort() {
                 app.set_message(format!("Sort error: {}", e));
             }
         }
         KeyCode::Char('f') => {
-            // Cycle source type filter
             if let Err(e) = app.cycle_library_filter() {
                 app.set_message(format!("Filter error: {}", e));
             }
+        }
+        KeyCode::Esc => {
+            app.screen = Screen::Home;
+            let _ = app.refresh_home();
         }
         _ => {}
     }
 }
 
-fn handle_syosetu_key(app: &mut App, key: KeyEvent) {
+fn handle_chapter_select_key(app: &mut App, key: KeyEvent, source_id: i64) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(ref mut state) = app.syosetu_state {
-                state.selected_chapter = state.selected_chapter.saturating_sub(1);
+            if let Some(ref mut state) = app.chapter_select_state {
+                state.selected = state.selected.saturating_sub(1);
+                // Auto-adjust page
+                state.page = state.selected / state.page_size;
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(ref mut state) = app.syosetu_state {
-                let max = state.novel.chapters.len().saturating_sub(1);
-                state.selected_chapter = (state.selected_chapter + 1).min(max);
+            if let Some(ref mut state) = app.chapter_select_state {
+                let max = state.chapters.len().saturating_sub(1);
+                state.selected = (state.selected + 1).min(max);
+                state.page = state.selected / state.page_size;
             }
         }
+        KeyCode::Char('n') | KeyCode::PageDown => {
+            if let Some(ref mut state) = app.chapter_select_state {
+                if state.page + 1 < state.total_pages() {
+                    state.page += 1;
+                    state.selected = state.page * state.page_size;
+                }
+            }
+        }
+        KeyCode::Char('p') | KeyCode::PageUp => {
+            if let Some(ref mut state) = app.chapter_select_state {
+                if state.page > 0 {
+                    state.page -= 1;
+                    state.selected = state.page * state.page_size;
+                }
+            }
+        }
+        KeyCode::Char('x') => {
+            // Toggle skip on selected chapter
+            let chapter_info = app
+                .chapter_select_state
+                .as_ref()
+                .and_then(|s| s.chapters.get(s.selected))
+                .map(|ch| (ch.id, ch.is_skipped));
+            if let Some((cid, _was_skipped)) = chapter_info {
+                let conn = match app.open_db() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        app.set_message(format!("DB error: {}", e));
+                        return;
+                    }
+                };
+                match models::toggle_chapter_skip(&conn, cid) {
+                    Ok(now_skipped) => {
+                        if now_skipped {
+                            // Cancel any in-progress preprocessing
+                            if let Some(ref importer) = app.background_importer {
+                                importer.cancel_chapter(cid);
+                            }
+                            app.preprocessing_chapters.remove(&cid);
+                        }
+                        // Update in-memory state directly (avoid full DB reload)
+                        if let Some(ref mut state) = app.chapter_select_state {
+                            if let Some(ch) = state.chapters.iter_mut().find(|c| c.id == cid) {
+                                ch.is_skipped = now_skipped;
+                            }
+                            if now_skipped {
+                                state.total_skipped += 1;
+                                // Remove from read states so it doesn't count toward preprocess budget
+                                state.chapter_read_states.remove(&cid);
+                            } else {
+                                state.total_skipped = state.total_skipped.saturating_sub(1);
+                                // Re-add as NotImported (or Unread if it has a text_id)
+                                let has_text = state
+                                    .chapters
+                                    .iter()
+                                    .find(|c| c.id == cid)
+                                    .and_then(|c| c.text_id)
+                                    .is_some();
+                                state.chapter_read_states.insert(
+                                    cid,
+                                    if has_text {
+                                        app::ChapterReadState::Unread
+                                    } else {
+                                        app::ChapterReadState::NotImported
+                                    },
+                                );
+                            }
+                        }
+                        app.set_message(if now_skipped {
+                            "Chapter skipped"
+                        } else {
+                            "Chapter unskipped"
+                        });
+                        // Top up preprocessing queue (a skipped chapter freed a slot)
+                        app.start_preprocessing();
+                    }
+                    Err(e) => app.set_message(format!("Error: {}", e)),
+                }
+            }
+        }
+        KeyCode::Char('P') => {
+            // Manual preprocessing trigger
+            app.start_preprocessing();
+            app.set_message("Preprocessing queued");
+        }
         KeyCode::Enter => {
-            // Import selected chapter and open in reader
-            let info = app.syosetu_state.as_ref().map(|s| {
-                let ch = &s.novel.chapters[s.selected_chapter];
-                (s.novel.ncode.clone(), ch.number, ch.text_id)
-            });
-            if let Some((ncode, chapter_num, existing_text_id)) = info {
-                if let Some(text_id) = existing_text_id {
-                    // Already imported — just open it
+            // Open chapter — import first if needed
+            let chapter_info = app
+                .chapter_select_state
+                .as_ref()
+                .and_then(|s| s.chapters.get(s.selected).cloned());
+            let source_type = app
+                .chapter_select_state
+                .as_ref()
+                .map(|s| s.source.source_type.clone());
+
+            if let Some(ch) = chapter_info {
+                if ch.is_skipped {
+                    app.set_message("Chapter is skipped — press [x] to unskip first");
+                } else if let Some(text_id) = ch.text_id {
+                    // Already imported — open it
+                    app.previous_screen = Some(Screen::ChapterSelect { source_id });
                     if let Err(e) = app.load_text(text_id) {
                         app.set_message(format!("Error loading: {}", e));
                     }
-                } else {
-                    // Import the chapter
-                    app.set_message(format!("Importing chapter {}...", chapter_num));
-                    let conn = match app.open_db() {
-                        Ok(c) => c,
-                        Err(e) => {
-                            app.set_message(format!("DB error: {}", e));
-                            return;
+                } else if source_type.as_deref() == Some("syosetu") {
+                    // Not yet imported — queue for background import and wait
+                    let is_already_processing = app.preprocessing_chapters.contains(&ch.id);
+                    app.pending_open_chapter = Some(ch.id);
+
+                    if !is_already_processing {
+                        // Force-queue this specific chapter
+                        if let Some(ref mut importer) = app.background_importer {
+                            let state = app.chapter_select_state.as_ref().unwrap();
+                            importer.queue_single(
+                                state.source.id,
+                                &state.source.source_type,
+                                &state.source.external_id,
+                                ch.id,
+                                ch.chapter_number,
+                                &app.db_path,
+                            );
                         }
-                    };
-                    match crate::import::syosetu::import_chapter_quiet(&ncode, chapter_num, &conn) {
-                        Ok((text_id, title)) => {
-                            // Update the chapter's text_id
-                            if let Some(ref mut state) = app.syosetu_state {
-                                state.novel.chapters[state.selected_chapter].text_id = Some(text_id);
-                            }
-                            app.set_message(format!("Imported: {}", title));
-                            // Open in reader
-                            if let Err(e) = app.load_text(text_id) {
-                                app.set_message(format!("Error loading: {}", e));
-                            }
-                        }
-                        Err(e) => {
-                            app.set_message(format!("Import failed: {}", e));
-                        }
+                        app.preprocessing_chapters.insert(ch.id);
                     }
+                    app.set_message(format!(
+                        "Importing chapter {}... will open when ready",
+                        ch.chapter_number
+                    ));
+                } else {
+                    app.set_message("Chapter not yet imported");
                 }
             }
         }
         KeyCode::Esc => {
+            // Cancel pending chapter open if any
+            app.pending_open_chapter = None;
             app.screen = Screen::Library;
             let _ = app.refresh_library();
         }
@@ -655,7 +894,8 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                                     state.sentence_index -= 1;
                                     state.sidebar_scroll = 0;
                                     let prev_sentence = &state.sentences[state.sentence_index];
-                                    state.word_index = prev_sentence.tokens.iter().rposition(|t| !t.is_trivial);
+                                    state.word_index =
+                                        prev_sentence.tokens.iter().rposition(|t| !t.is_trivial);
                                 }
                             }
                         }
@@ -686,7 +926,8 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                                     state.sentence_index += 1;
                                     state.sidebar_scroll = 0;
                                     let next_sentence = &state.sentences[state.sentence_index];
-                                    state.word_index = next_sentence.tokens.iter().position(|t| !t.is_trivial);
+                                    state.word_index =
+                                        next_sentence.tokens.iter().position(|t| !t.is_trivial);
                                 }
                             }
                         }
@@ -741,9 +982,11 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        // Deselect word, or go back to library if no word selected
+        // Deselect word, or go back to previous screen if no word selected
         KeyCode::Esc => {
-            let has_word = app.reader_state.as_ref()
+            let has_word = app
+                .reader_state
+                .as_ref()
                 .map(|s| s.word_index.is_some())
                 .unwrap_or(false);
             if has_word {
@@ -751,7 +994,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                     state.word_index = None;
                 }
             } else {
-                if let Err(e) = app.back_to_library() {
+                if let Err(e) = app.back_from_reader() {
                     app.set_message(format!("Error: {}", e));
                 }
             }

@@ -31,7 +31,10 @@ pub fn render(frame: &mut Frame, title: &str, description: &str) {
 
     let content = Paragraph::new(vec![
         Line::from(""),
-        Line::from(Span::styled(description, Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            description,
+            Style::default().fg(Color::DarkGray),
+        )),
         Line::from(""),
         Line::from("Press Tab to switch screens."),
     ]);

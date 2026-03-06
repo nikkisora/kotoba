@@ -5,6 +5,7 @@ use std::io::Read;
 use std::path::Path;
 
 use super::text;
+use crate::db::models;
 
 /// Import an EPUB file. Each chapter becomes a separate text entry.
 /// Returns a Vec of (text_id, chapter_title) for all imported chapters.
@@ -32,7 +33,11 @@ pub fn import_epub(path: &Path, conn: &Connection) -> Result<Vec<(i64, String)>>
         anyhow::bail!("EPUB has no chapters in spine");
     }
 
-    println!("EPUB: \"{}\" — {} chapters found", book_title, spine_items.len());
+    println!(
+        "EPUB: \"{}\" — {} chapters found",
+        book_title,
+        spine_items.len()
+    );
 
     let pb = indicatif::ProgressBar::new(spine_items.len() as u64);
     pb.set_style(
@@ -79,7 +84,14 @@ pub fn import_epub(path: &Path, conn: &Connection) -> Result<Vec<(i64, String)>>
 
         pb.set_message(format!("\"{}\"", title));
 
-        match text::import_text_with_progress(&title, &chapter_text, "epub", Some(&source_url), conn, None) {
+        match text::import_text_with_progress(
+            &title,
+            &chapter_text,
+            "epub",
+            Some(&source_url),
+            conn,
+            None,
+        ) {
             Ok(text_id) => {
                 imported.push((text_id, title));
             }
@@ -105,6 +117,7 @@ pub fn import_epub(path: &Path, conn: &Connection) -> Result<Vec<(i64, String)>>
 }
 
 /// Import EPUB quietly, returning imported chapters.
+/// Also creates a web_source and web_source_chapters for grouped display.
 pub fn import_epub_quiet(path: &Path, conn: &Connection) -> Result<Vec<(i64, String)>> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("Failed to open EPUB: {}", path.display()))?;
@@ -123,7 +136,12 @@ pub fn import_epub_quiet(path: &Path, conn: &Connection) -> Result<Vec<(i64, Str
         .to_string();
 
     let source_url = path.to_string_lossy().to_string();
+
+    // Create web_source for this EPUB
+    let source_id = models::upsert_web_source(conn, "epub", &source_url, &book_title, "{}")?;
+
     let mut imported = Vec::new();
+    let mut chapter_num = 0;
 
     for (i, item_href) in spine_items.iter().enumerate() {
         let full_path = format!("{}{}", opf_dir, item_href);
@@ -141,13 +159,26 @@ pub fn import_epub_quiet(path: &Path, conn: &Connection) -> Result<Vec<(i64, Str
             continue;
         }
 
+        chapter_num += 1;
         let title = if chapter_title != format!("Chapter {}", i + 1) {
             format!("{} — {}", book_title, chapter_title)
         } else {
-            format!("{} — Chapter {}", book_title, i + 1)
+            format!("{} — Chapter {}", book_title, chapter_num)
         };
 
-        if let Ok(text_id) = text::import_text_quiet(&title, &chapter_text, "epub", Some(&source_url), conn) {
+        if let Ok(text_id) =
+            text::import_text_quiet(&title, &chapter_text, "epub", Some(&source_url), conn)
+        {
+            // Create chapter entry linking to the text
+            let _ = models::insert_web_source_chapter(
+                conn,
+                source_id,
+                chapter_num as i32,
+                &chapter_title,
+                Some(text_id),
+                0,
+                "",
+            );
             imported.push((text_id, title));
         }
     }
@@ -163,12 +194,15 @@ fn parse_opf(archive: &mut zip::ZipArchive<std::fs::File>) -> Result<(String, Ve
 
     let container = Html::parse_document(&container_xml);
     let opf_path = if let Ok(sel) = Selector::parse("rootfile") {
-        container.select(&sel).next()
+        container
+            .select(&sel)
+            .next()
             .and_then(|e| e.value().attr("full-path"))
             .map(|s| s.to_string())
     } else {
         None
-    }.unwrap_or_else(|| "content.opf".to_string());
+    }
+    .unwrap_or_else(|| "content.opf".to_string());
 
     // Read the OPF file
     let opf_xml = read_zip_entry(archive, &opf_path)
@@ -212,7 +246,8 @@ fn parse_opf(archive: &mut zip::ZipArchive<std::fs::File>) -> Result<(String, Ve
 
 /// Read a file from the ZIP archive.
 fn read_zip_entry(archive: &mut zip::ZipArchive<std::fs::File>, path: &str) -> Result<String> {
-    let mut entry = archive.by_name(path)
+    let mut entry = archive
+        .by_name(path)
         .with_context(|| format!("Entry not found in EPUB: {}", path))?;
     let mut content = String::new();
     entry.read_to_string(&mut content)?;
@@ -228,16 +263,18 @@ fn extract_chapter_text(html_content: &str, chapter_num: usize) -> (String, Stri
         .iter()
         .find_map(|tag| {
             Selector::parse(tag).ok().and_then(|sel| {
-                document.select(&sel).next().map(|e| {
-                    e.text().collect::<String>().trim().to_string()
-                })
+                document
+                    .select(&sel)
+                    .next()
+                    .map(|e| e.text().collect::<String>().trim().to_string())
             })
         })
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| format!("Chapter {}", chapter_num));
 
     // Extract text from body
-    let body_selector = Selector::parse("body").unwrap_or_else(|_| Selector::parse("html").unwrap());
+    let body_selector =
+        Selector::parse("body").unwrap_or_else(|_| Selector::parse("html").unwrap());
 
     let mut text = String::new();
     if let Some(body) = document.select(&body_selector).next() {

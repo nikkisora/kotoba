@@ -29,6 +29,9 @@ pub struct ReaderConfig {
     pub sidebar_width: u16,
     #[serde(default = "default_true")]
     pub furigana: bool,
+    /// Number of chapters to keep preprocessed ahead of the reader.
+    #[serde(default = "default_preprocess_ahead")]
+    pub preprocess_ahead: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,18 +56,41 @@ pub struct LlmConfig {
     pub max_tokens: usize,
 }
 
-fn default_theme() -> String { "tokyo-night".into() }
-fn default_sidebar_width() -> u16 { 30 }
-fn default_true() -> bool { true }
-fn default_answer_mode() -> String { "meaning_recall".into() }
-fn default_new_cards() -> u32 { 20 }
-fn default_llm_endpoint() -> String { "https://api.openai.com/v1".into() }
-fn default_model() -> String { "gpt-4o".into() }
-fn default_max_tokens() -> usize { 2048 }
+fn default_theme() -> String {
+    "tokyo-night".into()
+}
+fn default_sidebar_width() -> u16 {
+    30
+}
+fn default_true() -> bool {
+    true
+}
+fn default_preprocess_ahead() -> usize {
+    3
+}
+fn default_answer_mode() -> String {
+    "meaning_recall".into()
+}
+fn default_new_cards() -> u32 {
+    20
+}
+fn default_llm_endpoint() -> String {
+    "https://api.openai.com/v1".into()
+}
+fn default_model() -> String {
+    "gpt-4o".into()
+}
+fn default_max_tokens() -> usize {
+    2048
+}
 
 impl Default for ReaderConfig {
     fn default() -> Self {
-        Self { sidebar_width: default_sidebar_width(), furigana: true }
+        Self {
+            sidebar_width: default_sidebar_width(),
+            furigana: true,
+            preprocess_ahead: default_preprocess_ahead(),
+        }
     }
 }
 
@@ -99,12 +125,18 @@ impl AppConfig {
 
     /// Resolved DB path — uses config override or defaults to XDG data dir.
     pub fn db_path(&self) -> PathBuf {
-        self.general.db_path.clone().unwrap_or_else(|| Self::default_data_dir().join("kotoba.db"))
+        self.general
+            .db_path
+            .clone()
+            .unwrap_or_else(|| Self::default_data_dir().join("kotoba.db"))
     }
 
     /// Resolved JMdict path — uses config override or defaults to XDG data dir.
     pub fn jmdict_path(&self) -> PathBuf {
-        self.general.jmdict_path.clone().unwrap_or_else(|| Self::default_data_dir().join("JMdict_e.xml"))
+        self.general
+            .jmdict_path
+            .clone()
+            .unwrap_or_else(|| Self::default_data_dir().join("JMdict_e.xml"))
     }
 
     /// Ensure the data directory exists (creates it if needed).
@@ -112,8 +144,9 @@ impl AppConfig {
         let db_dir = self.db_path().parent().map(|p| p.to_path_buf());
         if let Some(dir) = db_dir {
             if !dir.exists() {
-                std::fs::create_dir_all(&dir)
-                    .with_context(|| format!("Failed to create data directory: {}", dir.display()))?;
+                std::fs::create_dir_all(&dir).with_context(|| {
+                    format!("Failed to create data directory: {}", dir.display())
+                })?;
             }
         }
         Ok(())
@@ -125,7 +158,10 @@ impl AppConfig {
             let content = std::fs::read_to_string(p)
                 .with_context(|| format!("Failed to read config file: {}", p.display()))?;
             toml::from_str(&content).context("Failed to parse config file")?
-        } else if let Some(cfg_path) = dirs::config_dir().map(|d| d.join("kotoba").join("kotoba.toml")).filter(|p| p.exists()) {
+        } else if let Some(cfg_path) = dirs::config_dir()
+            .map(|d| d.join("kotoba").join("kotoba.toml"))
+            .filter(|p| p.exists())
+        {
             let content = std::fs::read_to_string(&cfg_path)?;
             toml::from_str(&content).context("Failed to parse config file")?
         } else {
