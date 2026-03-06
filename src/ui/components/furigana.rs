@@ -100,6 +100,15 @@ pub fn render_sentence(
             } else {
                 surface_width
             };
+            let style = if t.is_trivial {
+                if t.is_selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                }
+            } else {
+                status_style(t.vocabulary_status, t.is_selected)
+            };
             TokenLayout {
                 surface: t.surface.clone(),
                 reading: furigana_reading.to_string(),
@@ -107,7 +116,7 @@ pub fn render_sentence(
                 reading_width,
                 slot_width,
                 needs_furigana,
-                style: status_style(t.vocabulary_status, t.is_selected),
+                style,
             }
         })
         .collect();

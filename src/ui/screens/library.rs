@@ -76,85 +76,104 @@ pub fn render(frame: &mut Frame, app: &App) {
     );
 
     // Content
+    let has_pending = !app.pending_imports.is_empty();
+    let has_items = items.map(|i| !i.is_empty()).unwrap_or(false);
+
     match items {
-        Some(items) if !items.is_empty() => {
+        Some(items) if has_items || has_pending => {
             let stats_map = lib.map(|l| &l.stats);
             let chapter_counts = lib.map(|l| &l.source_chapter_counts);
 
-            let list_items: Vec<ListItem> = items
+            // Pending imports shown at top with spinner
+            let spinner = app.spinner_char();
+            let mut list_items: Vec<ListItem> = app
+                .pending_imports
                 .iter()
-                .enumerate()
-                .map(|(i, item)| {
-                    let marker = if i == selected { "▶ " } else { "  " };
-                    let style = if i == selected {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default()
-                    };
-                    let icon = source_icon(item.source_type());
-
-                    let detail_str = match item {
-                        LibraryItem::Text(t) => {
-                            let pbar = progress_bar(
-                                t.last_sentence_index as u64,
-                                t.total_sentences as u64,
-                                10,
-                            );
-                            let pct = if t.total_sentences > 0 {
-                                (t.last_sentence_index * 100 / t.total_sentences) as u8
-                            } else {
-                                0
-                            };
-
-                            let word_stats = stats_map
-                                .and_then(|m| m.get(&t.id))
-                                .map(|s| {
-                                    let kpct = if s.unique_vocab == 0 {
-                                        0
-                                    } else {
-                                        s.known_count * 100 / s.unique_vocab
-                                    };
-                                    let lpct = if s.unique_vocab == 0 {
-                                        0
-                                    } else {
-                                        s.learning_count * 100 / s.unique_vocab
-                                    };
-                                    let npct = if s.unique_vocab == 0 {
-                                        0
-                                    } else {
-                                        s.new_count * 100 / s.unique_vocab
-                                    };
-                                    format!(" K:{}% L:{}% N:{}%", kpct, lpct, npct)
-                                })
-                                .unwrap_or_default();
-
-                            format!("  {} {}%{}", pbar, pct, word_stats)
-                        }
-                        LibraryItem::Source(ws) => {
-                            let counts = chapter_counts
-                                .and_then(|m| m.get(&ws.id))
-                                .copied()
-                                .unwrap_or((0, 0, 0));
-                            format!("  ({} ch, {} imported)", counts.0, counts.1)
-                        }
-                    };
-
-                    let date_str = &item.created_at()[..10.min(item.created_at().len())];
-
+                .map(|label| {
                     ListItem::new(Line::from(vec![
-                        Span::styled(marker, style),
-                        Span::raw(format!("{} ", icon)),
-                        Span::styled(item.title(), style),
+                        Span::raw("  "),
+                        Span::styled(format!("{} ", spinner), Style::default().fg(Color::Yellow)),
                         Span::styled(
-                            format!("  [{}]  {}", item.source_type(), date_str),
-                            Style::default().fg(Color::DarkGray),
+                            format!("Importing: {}", label),
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::ITALIC),
                         ),
-                        Span::styled(detail_str, Style::default().fg(Color::Rgb(100, 140, 180))),
                     ]))
                 })
                 .collect();
+
+            // Regular library items
+            list_items.extend(items.iter().enumerate().map(|(i, item)| {
+                let marker = if i == selected { "▶ " } else { "  " };
+                let style = if i == selected {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let icon = source_icon(item.source_type());
+
+                let detail_str = match item {
+                    LibraryItem::Text(t) => {
+                        let pbar = progress_bar(
+                            t.last_sentence_index as u64,
+                            t.total_sentences as u64,
+                            10,
+                        );
+                        let pct = if t.total_sentences > 0 {
+                            (t.last_sentence_index * 100 / t.total_sentences) as u8
+                        } else {
+                            0
+                        };
+
+                        let word_stats = stats_map
+                            .and_then(|m| m.get(&t.id))
+                            .map(|s| {
+                                let kpct = if s.unique_vocab == 0 {
+                                    0
+                                } else {
+                                    s.known_count * 100 / s.unique_vocab
+                                };
+                                let lpct = if s.unique_vocab == 0 {
+                                    0
+                                } else {
+                                    s.learning_count * 100 / s.unique_vocab
+                                };
+                                let npct = if s.unique_vocab == 0 {
+                                    0
+                                } else {
+                                    s.new_count * 100 / s.unique_vocab
+                                };
+                                format!(" K:{}% L:{}% N:{}%", kpct, lpct, npct)
+                            })
+                            .unwrap_or_default();
+
+                        format!("  {} {}%{}", pbar, pct, word_stats)
+                    }
+                    LibraryItem::Source(ws) => {
+                        let counts = chapter_counts
+                            .and_then(|m| m.get(&ws.id))
+                            .copied()
+                            .unwrap_or((0, 0, 0));
+                        format!("  ({} ch, {} imported)", counts.0, counts.1)
+                    }
+                };
+
+                let date_str = &item.created_at()[..10.min(item.created_at().len())];
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(marker, style),
+                    Span::raw(format!("{} ", icon)),
+                    Span::styled(item.title(), style),
+                    Span::styled(
+                        format!("  [{}]  {}", item.source_type(), date_str),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(detail_str, Style::default().fg(Color::Rgb(100, 140, 180))),
+                ]))
+            }));
 
             let count_label = format!(" Library ({}) ", items.len());
             let list = List::new(list_items).block(
@@ -165,7 +184,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             );
             frame.render_widget(list, outer[1]);
         }
-        _ => {
+        _ if !has_pending => {
             let msg = Paragraph::new(vec![
                 Line::from(""),
                 Line::from(Span::styled(
@@ -189,6 +208,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             );
             frame.render_widget(msg, outer[1]);
         }
+        _ => {} // has_pending with no items — handled by first arm
     }
 
     // Status bar

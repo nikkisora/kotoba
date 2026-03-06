@@ -440,9 +440,13 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             KeyCode::Esc => app.popup = None,
             KeyCode::Char('c') => {
                 app.popup = None;
-                match app.import_clipboard() {
-                    Ok(title) => app.set_message(format!("Imported: {}", title)),
-                    Err(e) => app.set_message(format!("Clipboard import failed: {}", e)),
+                if let Some(ref importer) = app.background_importer {
+                    importer.import_clipboard(app.db_path.clone());
+                } else {
+                    match app.import_clipboard() {
+                        Ok(title) => app.set_message(format!("Imported: {}", title)),
+                        Err(e) => app.set_message(format!("Clipboard import failed: {}", e)),
+                    }
                 }
             }
             KeyCode::Char('u') => {
@@ -468,9 +472,13 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
                 if let Some(PopupState::UrlInput { ref text }) = app.popup {
                     let url = text.clone();
                     app.popup = None;
-                    match app.import_url(&url) {
-                        Ok(title) => app.set_message(format!("Imported: {}", title)),
-                        Err(e) => app.set_message(format!("URL import failed: {}", e)),
+                    if let Some(ref importer) = app.background_importer {
+                        importer.import_url(url, app.db_path.clone());
+                    } else {
+                        match app.import_url(&url) {
+                            Ok(title) => app.set_message(format!("Imported: {}", title)),
+                            Err(e) => app.set_message(format!("URL import failed: {}", e)),
+                        }
                     }
                 }
             }
@@ -516,11 +524,18 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             KeyCode::Esc => app.popup = None,
             KeyCode::Enter => {
                 if let Some(PopupState::FilePathInput { ref text }) = app.popup {
-                    let path = text.clone();
+                    let path_str = text.clone();
                     app.popup = None;
-                    match app.import_file_path(&path) {
-                        Ok(result) => app.set_message(format!("Imported: {}", result)),
-                        Err(e) => app.set_message(format!("File import failed: {}", e)),
+                    let path = std::path::PathBuf::from(&path_str);
+                    if !path.exists() {
+                        app.set_message(format!("File not found: {}", path_str));
+                    } else if let Some(ref importer) = app.background_importer {
+                        importer.import_file(path, app.db_path.clone());
+                    } else {
+                        match app.import_file_path(&path_str) {
+                            Ok(result) => app.set_message(format!("Imported: {}", result)),
+                            Err(e) => app.set_message(format!("File import failed: {}", e)),
+                        }
                     }
                 }
             }

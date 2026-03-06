@@ -261,6 +261,8 @@ pub struct App {
     pub tick_count: u64,
     /// Chapter ID we're waiting on to auto-open when its import completes.
     pub pending_open_chapter: Option<i64>,
+    /// Labels of text imports currently running in the background.
+    pub pending_imports: Vec<String>,
 }
 
 impl App {
@@ -283,6 +285,7 @@ impl App {
             db_path,
             tick_count: 0,
             pending_open_chapter: None,
+            pending_imports: Vec::new(),
         }
     }
 
@@ -478,6 +481,33 @@ impl App {
             }
             ImportEvent::NovelInfoFailed { ncode, error } => {
                 self.set_message(format!("Failed to load {}: {}", ncode, error));
+            }
+            ImportEvent::TextImportStarted { label } => {
+                self.pending_imports.push(label);
+            }
+            ImportEvent::TextImportCompleted { title } => {
+                // Remove the first pending import (FIFO)
+                if !self.pending_imports.is_empty() {
+                    self.pending_imports.remove(0);
+                }
+                self.set_message(format!("Imported: {}", title));
+                // Refresh whichever list screen we're on
+                match &self.screen {
+                    Screen::Library => {
+                        let _ = self.refresh_library();
+                    }
+                    Screen::Home => {
+                        let _ = self.refresh_home();
+                    }
+                    _ => {}
+                }
+            }
+            ImportEvent::TextImportFailed { label, error } => {
+                // Remove matching pending import
+                if let Some(pos) = self.pending_imports.iter().position(|l| *l == label) {
+                    self.pending_imports.remove(pos);
+                }
+                self.set_message(format!("Import failed ({}): {}", label, error));
             }
         }
     }

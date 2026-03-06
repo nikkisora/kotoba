@@ -55,6 +55,12 @@ pub enum ImportEvent {
     NovelInfoLoaded { source_id: i64, title: String },
     /// Novel metadata fetch failed.
     NovelInfoFailed { ncode: String, error: String },
+    /// A standalone text import (file, clipboard, URL, subtitle, epub) has started.
+    TextImportStarted { label: String },
+    /// A standalone text import completed successfully.
+    TextImportCompleted { title: String },
+    /// A standalone text import failed.
+    TextImportFailed { label: String, error: String },
 }
 
 /// A task to import a single chapter.
@@ -292,6 +298,116 @@ impl BackgroundImporter {
                     ncode,
                     error: format!("Refresh failed: {}", e),
                 });
+            }
+        });
+    }
+
+    /// Import a file in the background (text, subtitle, epub).
+    pub fn import_file(&self, path: std::path::PathBuf, db_path: PathBuf) {
+        let tx = self.event_tx.clone();
+        let label = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("file")
+            .to_string();
+        let _ = tx.send(ImportEvent::TextImportStarted {
+            label: label.clone(),
+        });
+        thread::spawn(move || {
+            let result = (|| -> anyhow::Result<String> {
+                let conn = connection::open_or_create(&db_path)?;
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                match ext.as_str() {
+                    "srt" | "ass" | "ssa" => {
+                        let (_, title) =
+                            crate::import::subtitle::import_subtitle_quiet(&path, &conn)?;
+                        Ok(title)
+                    }
+                    "epub" => {
+                        let chapters = crate::import::epub::import_epub_quiet(&path, &conn)?;
+                        Ok(format!("{} chapters imported", chapters.len()))
+                    }
+                    _ => {
+                        let title = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("Untitled")
+                            .to_string();
+                        let content = std::fs::read_to_string(&path)?;
+                        crate::import::text::import_text_quiet(
+                            &title, &content, "text", None, &conn,
+                        )?;
+                        Ok(title)
+                    }
+                }
+            })();
+            match result {
+                Ok(title) => {
+                    let _ = tx.send(ImportEvent::TextImportCompleted { title });
+                }
+                Err(e) => {
+                    let _ = tx.send(ImportEvent::TextImportFailed {
+                        label,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        });
+    }
+
+    /// Import clipboard content in the background.
+    pub fn import_clipboard(&self, db_path: PathBuf) {
+        let tx = self.event_tx.clone();
+        let _ = tx.send(ImportEvent::TextImportStarted {
+            label: "clipboard".to_string(),
+        });
+        thread::spawn(move || {
+            let result = (|| -> anyhow::Result<String> {
+                let conn = connection::open_or_create(&db_path)?;
+                let (_, title) = crate::import::clipboard::import_clipboard_quiet(&conn)?;
+                Ok(title)
+            })();
+            match result {
+                Ok(title) => {
+                    let _ = tx.send(ImportEvent::TextImportCompleted { title });
+                }
+                Err(e) => {
+                    let _ = tx.send(ImportEvent::TextImportFailed {
+                        label: "clipboard".to_string(),
+                        error: e.to_string(),
+                    });
+                }
+            }
+        });
+    }
+
+    /// Import from URL in the background.
+    pub fn import_url(&self, url: String, db_path: PathBuf) {
+        let tx = self.event_tx.clone();
+        let label = url.clone();
+        let _ = tx.send(ImportEvent::TextImportStarted {
+            label: label.clone(),
+        });
+        thread::spawn(move || {
+            let result = (|| -> anyhow::Result<String> {
+                let conn = connection::open_or_create(&db_path)?;
+                let (_, title) = crate::import::web::import_url_quiet(&url, &conn)?;
+                Ok(title)
+            })();
+            match result {
+                Ok(title) => {
+                    let _ = tx.send(ImportEvent::TextImportCompleted { title });
+                }
+                Err(e) => {
+                    let _ = tx.send(ImportEvent::TextImportFailed {
+                        label,
+                        error: e.to_string(),
+                    });
+                }
             }
         });
     }

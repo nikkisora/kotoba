@@ -192,20 +192,86 @@ pub fn split_paragraphs(text: &str) -> Vec<String> {
 }
 
 /// Split a paragraph into sentences.
-/// Splits on Japanese sentence-ending punctuation: 。！？ and newlines.
+/// Splits on Japanese sentence-ending punctuation: 。！？ and newlines,
+/// but NOT when inside quotation marks 「」『』 or parentheses （）〈〉.
+/// Closing brackets/quotes immediately after a sentence-ender are absorbed
+/// into the same sentence (e.g. `！？）` stays together).
 pub fn split_sentences(paragraph: &str) -> Vec<String> {
     let mut sentences = Vec::new();
     let mut current = String::new();
+    let mut depth: i32 = 0; // nesting depth for brackets/quotes
 
-    for c in paragraph.chars() {
+    let chars: Vec<char> = paragraph.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        let c = chars[i];
         current.push(c);
-        if c == '。' || c == '！' || c == '？' || c == '\n' {
+
+        // Track nesting of quotes and brackets
+        match c {
+            '「' | '『' | '（' | '〈' | '《' | '【' | '｛' | '(' => depth += 1,
+            '」' | '』' | '）' | '〉' | '》' | '】' | '｝' | ')' => {
+                depth = (depth - 1).max(0);
+            }
+            _ => {}
+        }
+
+        let is_sentence_end = c == '。' || c == '！' || c == '？' || c == '\n';
+
+        // Inside quotes/brackets: only split on 。 if the quote appears unclosed
+        // (i.e., no matching closing bracket exists anywhere ahead).
+        // ！ and ？ never split inside quotes.
+        let should_split = if !is_sentence_end {
+            false
+        } else if depth <= 0 {
+            true
+        } else if c == '。' || c == '\n' {
+            // At depth > 0: split on 。 only if the bracket seems unclosed.
+            // Heuristic: scan ahead for any closing bracket. If found, don't split.
+            let mut close_count = 0i32;
+            let mut open_count = 0i32;
+            for &ahead in &chars[i + 1..] {
+                if matches!(ahead, '「' | '『' | '（' | '〈' | '《' | '【' | '｛' | '(') {
+                    open_count += 1;
+                }
+                if matches!(ahead, '」' | '』' | '）' | '〉' | '》' | '】' | '｝' | ')') {
+                    if close_count < open_count {
+                        // This close matches an open we saw during lookahead, not ours
+                        open_count -= 1;
+                    } else {
+                        close_count += 1;
+                    }
+                }
+            }
+            // If there are enough closes ahead to match our current depth, bracket is closed
+            close_count < depth
+        } else {
+            false // ！？ inside quotes — never split
+        };
+
+        if should_split {
+            // Absorb any trailing closing brackets/quotes that immediately follow
+            while i + 1 < len {
+                let next = chars[i + 1];
+                if matches!(next, '」' | '』' | '）' | '〉' | '》' | '】' | '｝' | ')') {
+                    i += 1;
+                    current.push(next);
+                    depth = (depth - 1).max(0);
+                } else {
+                    break;
+                }
+            }
+
             let trimmed = current.trim().to_string();
             if !trimmed.is_empty() {
                 sentences.push(trimmed);
             }
             current.clear();
         }
+
+        i += 1;
     }
 
     let trimmed = current.trim().to_string();
@@ -242,6 +308,81 @@ mod tests {
         assert_eq!(sentences.len(), 2);
         assert_eq!(sentences[0], "吾輩は猫である。");
         assert_eq!(sentences[1], "名前はまだ無い。");
+    }
+
+    #[test]
+    fn test_split_sentences_quoted() {
+        // Punctuation inside quotes should NOT split
+        let para = "友達が「美味しいよ！」と言っていた。次の文。";
+        let sentences = split_sentences(para);
+        assert_eq!(sentences.len(), 2);
+        assert_eq!(sentences[0], "友達が「美味しいよ！」と言っていた。");
+        assert_eq!(sentences[1], "次の文。");
+    }
+
+    #[test]
+    fn test_split_sentences_parenthesized() {
+        // Punctuation inside parentheses should NOT split
+        let para = "（えっ、100%オーガニック！？）と、私は少し驚いた。";
+        let sentences = split_sentences(para);
+        assert_eq!(sentences.len(), 1);
+        assert_eq!(
+            sentences[0],
+            "（えっ、100%オーガニック！？）と、私は少し驚いた。"
+        );
+    }
+
+    #[test]
+    fn test_split_sentences_nested_quotes() {
+        // Nested quotes: 「...『...！』...」
+        let para = "彼は「彼女が『すごい！』と叫んだ」と言った。終わり。";
+        let sentences = split_sentences(para);
+        assert_eq!(sentences.len(), 2);
+        assert_eq!(sentences[0], "彼は「彼女が『すごい！』と叫んだ」と言った。");
+    }
+
+    #[test]
+    fn test_split_sentences_unclosed_bracket() {
+        // Unclosed bracket — should NOT swallow the entire rest of the paragraph
+        let para = "彼は「すごい。次の文。最後の文。";
+        let sentences = split_sentences(para);
+        // The 「 is never closed — no 」 ahead before next 。, so split normally
+        assert_eq!(
+            sentences.len(),
+            3,
+            "Unclosed bracket should not prevent all splitting. Got: {:?}",
+            sentences
+        );
+        assert_eq!(sentences[0], "彼は「すごい。");
+        assert_eq!(sentences[1], "次の文。");
+        assert_eq!(sentences[2], "最後の文。");
+    }
+
+    #[test]
+    fn test_split_sentences_period_inside_closed_quotes() {
+        // 。 inside properly closed quotes should NOT split
+        let para = "「行くよ。明日だ。」と彼は言った。次の文。";
+        let sentences = split_sentences(para);
+        assert_eq!(
+            sentences.len(),
+            2,
+            "Period inside closed quotes should not split. Got: {:?}",
+            sentences
+        );
+        assert_eq!(sentences[0], "「行くよ。明日だ。」と彼は言った。");
+        assert_eq!(sentences[1], "次の文。");
+    }
+
+    #[test]
+    fn test_split_sentences_question_in_quotes() {
+        // Question mark inside quotes should not split
+        let para = "店員さんに「安全に食べられますか？」と聞いた。店員さんは答えた。";
+        let sentences = split_sentences(para);
+        assert_eq!(sentences.len(), 2);
+        assert_eq!(
+            sentences[0],
+            "店員さんに「安全に食べられますか？」と聞いた。"
+        );
     }
 
     #[test]
