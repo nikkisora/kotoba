@@ -13,10 +13,16 @@ Built with Rust, Ratatui, SQLite, and Sudachi.
 |  +-------------------------------------------------------+  |
 |  | Input (crossterm) -> App State Update -> Render Frame |  |
 |  +-------------------------------------------------------+  |
-|        |                |              |             |      |
-|  +---------+   +----------+   +----------+   +---------+    |
-|  | Library |   |  Reader  |   |  Review  |   |  Stats  |    |
-|  +---------+   +----------+   +----------+   +---------+    |
+|        |          |            |            |          |     |
+|  +------+  +---------+  +----------+  +--------+  +------+ |
+|  | Home |  | Library |  | Chapter  |  | Reader |  |Review| |
+|  |      |  |         |  | Select   |  |        |  |      | |
+|  +------+  +---------+  +----------+  +--------+  +------+ |
+|      \         |    Esc↑  ↓Enter  Esc↑   ↑  Tab↕          |
+|       `---Esc--'                         Tab               |
+|  +-------------------------------------------------------+  |
+|  |       BackgroundImporter (thread pool, mpsc)          |  |
+|  +-------------------------------------------------------+  |
 +-------------------------------------------------------------+
 |                      Application Layer                      |
 |  +----------+ +-----------+ +------------+ +-----------+    |
@@ -100,9 +106,11 @@ kotoba/
 │   │   │   ├── text_area.rs   # Scrollable paragraph rendering
 │   │   │   └── sidebar.rs     # Dictionary / context panel
 │   │   └── screens/
+│   │       ├── home.rs        # Landing screen: recent texts, quick actions
 │   │       ├── reader.rs      # Interactive text loop
 │   │       ├── review.rs      # FSRS flashcard UI
-│   │       └── library.rs     # Source select
+│   │       ├── library.rs     # Source list (grouped by source)
+│   │       └── chapter_select.rs  # Paginated chapter list for multi-chapter sources
 │   ├── core/
 │   │   ├── tokenizer.rs       # lindera/UniDic wrapper handling conjugations
 │   │   ├── dictionary.rs      # SQLite JMdict lookups
@@ -480,6 +488,145 @@ Each card can be reviewed in one of these modes (configured per session or per c
 - [x] All imports show an `indicatif` progress bar with paragraph count, token count, and new vocab count
 - [x] EPUB imports show chapter-level progress
 - [x] Quiet import variants available for TUI context (no terminal output)
+
+---
+
+### Phase 3.5 — Screen Layout & Navigation Overhaul
+
+**Goal**: Replace the flat Tab-cycling navigation with a hub-and-spoke model. Add a Home screen, chapter-aware source browsing, progress indicators, and background preprocessing so imports never freeze the UI.
+
+#### 3.5.1 Database Changes
+
+- [ ] Add `last_read_at` (nullable timestamp) column to `texts` table — updated every time a text is opened or navigated in Reader
+- [ ] Add `is_skipped` (boolean, default false) column to `web_source_chapters` table — skipped chapters are grayed out in chapter list and excluded from word statistics/SRS
+- [ ] Extend EPUB import to store a `web_sources` row per book with `source_type = "epub"`, and a `web_source_chapters` row per chapter linking to its `texts.id`
+  - Currently EPUB chapters are independent `texts` rows with no parent grouping; this adds the same structure Syosetu already has
+- [ ] Add `reading_progress` table (or columns on `texts`): `text_id`, `current_sentence`, `total_sentences` — kept in sync when navigating in Reader
+  - Currently progress is saved as `sentence_index` on `ReaderState`; make it persistent and queryable for the Home screen
+
+#### 3.5.2 Screen Enum & Navigation Model
+
+- [ ] New `Screen` enum:
+  ```rust
+  enum Screen {
+      Home,
+      Library,
+      ChapterSelect { source_id: i64 },  // paginated chapter list for Syosetu/EPUB/PDF sources
+      Reader,
+      Review,
+  }
+  ```
+- [ ] **Tab key** — two-mode toggle between **Reader** ↔ **non-Reader**:
+  - From any non-Reader screen (Home, Library, ChapterSelect, Review): Tab → open the most recently read text in Reader (by `last_read_at`). If no text has been read yet, show a status message instead.
+  - From Reader: Tab → return to the screen the user came from (store a `previous_screen` field on `App`)
+  - Tab no longer cycles through all screens
+- [ ] **Esc key** — contextual "go back":
+  - Reader (no word selected): save progress → back to previous screen
+  - Reader (word selected): deselect word (existing behavior)
+  - ChapterSelect: → Library
+  - Library: → Home
+  - Review: → Home
+  - Home: no-op (already at root)
+- [ ] Remove `Screen::Syosetu` — folded into `ChapterSelect`
+- [ ] Remove `Screen::Stats` — deferred to Phase 6, not in the Screen enum until then
+
+#### 3.5.3 Home Screen
+
+- [ ] Implement `ui/screens/home.rs`:
+  - **Recently read** section: list of texts/chapters with unfinished progress (i.e., `current_sentence < total_sentences`), sorted by `last_read_at` descending, max ~10 entries
+    - Each entry shows: title (truncated), source type icon, progress bar `████░░░░ 42%`, word status summary `Known: 67% | Learning: 12% | New: 21%`
+    - `Enter` on an entry → open in Reader
+    - `↑`/`↓` to navigate the list
+  - **Quick actions** at bottom or side:
+    - `[l]` → Library
+    - `[r]` → Review (SRS) — shows due card count, e.g., `Review (12 due)`
+    - `[i]` → Import (sub-menu: file, clipboard, URL, syosetu)
+  - If no texts have been read yet, show a welcome message with import instructions
+- [ ] Home is the **default screen** on app launch
+
+#### 3.5.4 Library Screen Rework
+
+- [ ] Library shows **all sources** — not individual chapters:
+  - Plain text, clipboard, web, subtitle imports → shown as individual rows (one `texts` entry each)
+  - Syosetu novels → shown as a single row per novel (from `web_sources`), with chapter count displayed (e.g., `転スラ (142 chapters)`)
+  - EPUB books → shown as a single row per book (from `web_sources`), with chapter count
+  - PDF imports → same grouped treatment if multi-chapter, otherwise individual row
+- [ ] Each row displays:
+  - Source type icon, title, date imported/last read
+  - Progress bar (aggregate for multi-chapter sources: total sentences read across all non-skipped chapters / total sentences)
+  - Word status percentages (known / learning / new — across all non-skipped chapters)
+- [ ] Existing functionality preserved: sort (`s`), filter by source type (`f`), search (`/`), delete (`d`), import (`i`)
+- [ ] **Enter** behavior depends on source type:
+  - Plain text / clipboard / web / subtitle → open directly in Reader
+  - Syosetu / EPUB / PDF (multi-chapter) → navigate to `ChapterSelect` screen for that source
+
+#### 3.5.5 Chapter Select Screen
+
+- [ ] Implement `ui/screens/chapter_select.rs` — paginated chapter list for a single multi-chapter source:
+  - Header: source title, author (if available), total chapter count, overall progress
+  - Chapter list with pagination (e.g., 50 chapters per page, `PageUp`/`PageDown` or `n`/`p` to navigate pages) — necessary because Syosetu novels can have 500+ chapters
+  - Each chapter row shows:
+    - Chapter number, chapter title (matching source: EPUB `<h1-3>` tags, Syosetu chapter titles)
+    - Import status: `✓` imported, `…` preprocessing, `—` not yet imported
+    - Progress bar if imported: `████░░░░ 42%`
+    - Word status percentages if imported
+    - **Skipped chapters**: grayed out styling, `[skipped]` label, excluded from aggregate stats
+  - Keybindings:
+    - `Enter` — open chapter in Reader (imports first if not yet imported)
+    - `x` — toggle skip on selected chapter. If the chapter is currently being preprocessed, cancel its preprocessing and pick the next non-skipped chapter instead
+    - `↑`/`↓` — navigate chapters
+    - `PageUp`/`PageDown` or `n`/`p` — paginate
+    - `Esc` — back to Library
+    - `s` — sort (by number, by progress)
+  - Aggregate stats bar at top or bottom: total chapters, imported count, skipped count, overall completion %
+
+#### 3.5.6 Progress Indicators on Texts & Chapters
+
+- [ ] **Reading progress bar**: based on `current_sentence / total_sentences`, rendered as a mini bar in list views (Home, Library, ChapterSelect)
+  - Format: `████░░░░░░ 42%` using block characters, fits within ~15 terminal columns
+- [ ] **Word status breakdown**: `K:67% L:12% N:21%` — compact format for list rows
+  - Known = status 5, Learning = status 1-4, New = status 0
+  - Computed from `vocabulary` entries linked to tokens in the text
+  - For multi-chapter sources in Library: aggregate across all non-skipped chapters
+- [ ] Both indicators update whenever Reader progress is saved or vocabulary statuses change
+
+#### 3.5.7 Background Chapter Preprocessing
+
+- [ ] **Architecture**: worker thread pool for import tasks, communicating with the TUI via `mpsc` channel
+  - `BackgroundImporter` struct: owns a thread pool (e.g., `rayon::ThreadPool` with 3-4 threads or `std::thread::spawn` workers)
+  - Sends `ImportEvent` messages to the event loop:
+    - `ImportEvent::Started { source_id, chapter_number }`
+    - `ImportEvent::Progress { source_id, chapter_number, stage: String }` (e.g., "Fetching…", "Tokenizing…")
+    - `ImportEvent::Completed { source_id, chapter_number, text_id }`
+    - `ImportEvent::Failed { source_id, chapter_number, error: String }`
+    - `ImportEvent::Cancelled { source_id, chapter_number }`
+  - Add `ImportEvent` variant to the existing `Event` enum in `ui/events.rs`
+- [ ] **Eager preprocessing trigger**: when `ChapterSelect` screen is opened for a source:
+  - Identify the first 3 non-skipped, not-yet-imported chapters (starting from the earliest unread)
+  - Submit them to the `BackgroundImporter` queue
+  - As each completes, auto-queue the next non-skipped unimported chapter (maintain a rolling window of 3 in-flight)
+- [ ] **Cancellation**: each background task checks a `CancellationToken` (or `AtomicBool`) between stages (fetch, tokenize, DB write)
+  - When a chapter is marked as skipped while preprocessing: set its cancellation flag, the worker picks up the next eligible chapter
+- [ ] **UI indicators** in ChapterSelect:
+  - Chapters being preprocessed show a spinner: `⠋` / `⠙` / `⠹` / `⠸` (animated on tick)
+  - Completed chapters flip from spinner to `✓`
+  - Failed chapters show `✗` with error available on hover/Enter
+- [ ] **Syosetu novel info fetch** also moves to background:
+  - Opening a Syosetu source for the first time (or refreshing) triggers background fetch of novel metadata + chapter list
+  - ChapterSelect shows a loading state until metadata arrives
+- [ ] **Reader integration**: when navigating to the next chapter from Reader, if it's already preprocessed → instant load. If not, show a brief loading indicator while importing on-demand.
+- [ ] **DB connection handling**: each background worker opens its own `rusqlite::Connection` (SQLite WAL mode allows concurrent readers + one writer). The main thread's connection remains responsive.
+
+#### 3.5.8 Verification
+
+- [ ] Test: Tab from Home opens the most recently read text; Tab from Reader returns to previous screen
+- [ ] Test: Esc chain — Reader → ChapterSelect → Library → Home
+- [ ] Test: Library shows grouped Syosetu/EPUB sources, Enter opens ChapterSelect
+- [ ] Test: ChapterSelect pagination works with 500+ chapters
+- [ ] Test: skipping a chapter grays it out, excludes from stats, cancels in-progress preprocessing
+- [ ] Test: background preprocessing imports 3 chapters concurrently without freezing the UI
+- [ ] Test: progress bars and word status percentages update correctly after reading
+- [ ] Test: plain text / clipboard Enter from Library goes directly to Reader (no ChapterSelect)
 
 ---
 

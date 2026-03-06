@@ -6,14 +6,14 @@ use std::time::Instant;
 use crate::config::AppConfig;
 use crate::core::dictionary::{self, DictEntry};
 use crate::db::models::{self, TextStats, Vocabulary, VocabularyStatus};
-use crate::import::syosetsu::SyosetsuNovel;
+use crate::import::syosetu::SyosetuNovel;
 
 /// Which screen is currently active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Library,
     Reader,
-    Syosetsu,
+    Syosetu,
     Review,
     Stats,
 }
@@ -22,8 +22,8 @@ impl Screen {
     pub fn next(self) -> Self {
         match self {
             Screen::Library => Screen::Reader,
-            Screen::Reader => Screen::Syosetsu,
-            Screen::Syosetsu => Screen::Review,
+            Screen::Reader => Screen::Syosetu,
+            Screen::Syosetu => Screen::Review,
             Screen::Review => Screen::Stats,
             Screen::Stats => Screen::Library,
         }
@@ -64,6 +64,14 @@ pub enum PopupState {
     },
     /// Search/filter input for library.
     SearchInput {
+        text: String,
+    },
+    /// File path input for file/epub/subtitle import.
+    FilePathInput {
+        text: String,
+    },
+    /// Syosetu ncode input.
+    SyosetuInput {
         text: String,
     },
 }
@@ -160,9 +168,9 @@ pub struct LibraryState {
     pub source_types: Vec<String>,
 }
 
-/// Syosetsu novel browser state.
-pub struct SyosetsuState {
-    pub novel: SyosetsuNovel,
+/// Syosetu novel browser state.
+pub struct SyosetuState {
+    pub novel: SyosetuNovel,
     pub selected_chapter: usize,
 }
 
@@ -172,7 +180,7 @@ pub struct App {
     pub config: AppConfig,
     pub reader_state: Option<ReaderState>,
     pub library_state: Option<LibraryState>,
-    pub syosetsu_state: Option<SyosetsuState>,
+    pub syosetu_state: Option<SyosetuState>,
     pub popup: Option<PopupState>,
     pub message: Option<(String, Instant)>,
     pub should_quit: bool,
@@ -187,7 +195,7 @@ impl App {
             config,
             reader_state: None,
             library_state: None,
-            syosetsu_state: None,
+            syosetu_state: None,
             popup: None,
             message: None,
             should_quit: false,
@@ -385,12 +393,16 @@ impl App {
 
         let sentences = build_sentences(&paragraphs, &vocabulary_cache, &gloss_cache);
 
+        // Restore saved reading progress
+        let saved_index = models::get_reading_progress(&conn, text_id).unwrap_or(0);
+        let sentence_index = if saved_index < sentences.len() { saved_index } else { 0 };
+
         self.reader_state = Some(ReaderState {
             text_id,
             text_title: text.title.clone(),
             paragraphs,
             sentences,
-            sentence_index: 0,
+            sentence_index,
             word_index: None,
             vocabulary_cache,
             gloss_cache,
@@ -587,6 +599,72 @@ impl App {
         let (_text_id, title) = crate::import::web::import_url_quiet(url, &conn)?;
         self.refresh_library()?;
         Ok(title)
+    }
+
+    /// Import a file from a path (TUI context). Auto-detects format.
+    pub fn import_file_path(&mut self, path_str: &str) -> Result<String> {
+        let path = std::path::PathBuf::from(path_str);
+        if !path.exists() {
+            anyhow::bail!("File not found: {}", path_str);
+        }
+        let conn = self.open_db()?;
+        let ext = path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        let result = match ext.as_str() {
+            "srt" | "ass" | "ssa" => {
+                let (_, title) = crate::import::subtitle::import_subtitle_quiet(&path, &conn)?;
+                title
+            }
+            "epub" => {
+                let chapters = crate::import::epub::import_epub_quiet(&path, &conn)?;
+                format!("{} chapters imported", chapters.len())
+            }
+            _ => {
+                let text_id = crate::import::text::import_text_quiet(
+                    path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled"),
+                    &std::fs::read_to_string(&path)?,
+                    "text",
+                    None,
+                    &conn,
+                )?;
+                let text = models::get_text_by_id(&conn, text_id)?.map(|t| t.title).unwrap_or_default();
+                text
+            }
+        };
+        self.refresh_library()?;
+        Ok(result)
+    }
+
+    /// Load a Syosetu novel by ncode into the Syosetu TUI screen.
+    pub fn load_syosetu(&mut self, ncode_input: &str) -> Result<()> {
+        let ncode = crate::import::syosetu::parse_ncode(ncode_input)?;
+        let novel = crate::import::syosetu::fetch_novel_info(&ncode)?;
+        self.syosetu_state = Some(SyosetuState {
+            novel,
+            selected_chapter: 0,
+        });
+        self.screen = Screen::Syosetu;
+        Ok(())
+    }
+
+    /// Save current reading progress to the database.
+    pub fn save_reading_progress(&self) -> Result<()> {
+        if let Some(ref state) = self.reader_state {
+            let conn = self.open_db()?;
+            models::save_reading_progress(&conn, state.text_id, state.sentence_index)?;
+        }
+        Ok(())
+    }
+
+    /// Go back to library from reader, saving progress.
+    pub fn back_to_library(&mut self) -> Result<()> {
+        let _ = self.save_reading_progress();
+        self.screen = Screen::Library;
+        self.refresh_library()?;
+        Ok(())
     }
 
     /// Search the library by title.

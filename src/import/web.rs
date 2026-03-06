@@ -82,10 +82,11 @@ fn extract_article(html: &str, _url: &str) -> Result<(String, String)> {
         ".article-body",
         ".post-content",
         ".content",
-        "#novel_honbun",    // Syosetsu novel body
-        "#novel_p",         // Syosetsu preface
-        "#novel_a",         // Syosetsu afterword
-        ".novel_view",      // Alternative syosetsu
+        ".p-novel__body",   // Syosetu novel body (new layout)
+        "#novel_honbun",    // Syosetu novel body (legacy)
+        "#novel_p",         // Syosetu preface (legacy)
+        "#novel_a",         // Syosetu afterword (legacy)
+        ".novel_view",      // Alternative syosetu
     ];
 
     for selector_str in &article_selectors {

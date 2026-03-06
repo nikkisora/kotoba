@@ -12,7 +12,7 @@ fn source_icon(source_type: &str) -> &str {
         "text" => "📄",
         "clipboard" => "📋",
         "web" => "🌐",
-        "syosetsu" => "📖",
+        "syosetu" => "📖",
         "subtitle" => "🎬",
         "epub" => "📚",
         _ => "📝",
@@ -137,7 +137,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                 Line::from("  kotoba import <file>          — text, .srt, .ass, .epub"),
                 Line::from("  kotoba import --clipboard     — from clipboard"),
                 Line::from("  kotoba import --url <URL>     — from web page"),
-                Line::from("  kotoba syosetsu <ncode>       — from Syosetsu novel"),
+                Line::from("  kotoba syosetu <ncode>       — from Syosetu novel"),
                 Line::from(""),
                 Line::from("Or press [i] here to import from clipboard or URL."),
             ])

@@ -11,7 +11,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Library => screens::library::render(frame, app),
         Screen::Reader => screens::reader::render(frame, app),
-        Screen::Syosetsu => screens::syosetsu::render(frame, app),
+        Screen::Syosetu => screens::syosetu::render(frame, app),
         Screen::Review => screens::placeholder::render(frame, "Review", "SRS review mode — coming in Phase 4"),
         Screen::Stats => screens::placeholder::render(frame, "Stats", "Statistics — coming in Phase 6"),
     }

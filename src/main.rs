@@ -66,8 +66,8 @@ enum Commands {
     },
     /// Download and set up the JMdict dictionary automatically
     SetupDict,
-    /// Import a Syosetsu (小説家になろう) novel chapter
-    Syosetsu {
+    /// Import a Syosetu (小説家になろう) novel chapter
+    Syosetu {
         /// Novel URL or ncode (e.g. n1234ab)
         ncode: String,
 
@@ -164,16 +164,16 @@ fn main() -> Result<()> {
             let data_dir = db_path.parent().unwrap_or(std::path::Path::new("."));
             core::dictionary::setup_dict(&conn, data_dir)?;
         }
-        Commands::Syosetsu { ncode, chapter } => {
-            let ncode = import::syosetsu::parse_ncode(&ncode)?;
+        Commands::Syosetu { ncode, chapter } => {
+            let ncode = import::syosetu::parse_ncode(&ncode)?;
 
             if let Some(ch) = chapter {
-                let text_id = import::syosetsu::import_chapter(&ncode, ch, &conn)?;
+                let text_id = import::syosetu::import_chapter(&ncode, ch, &conn)?;
                 println!("Imported chapter {} with id: {text_id}", ch);
             } else {
                 // Show novel info and chapter list
                 println!("Fetching novel info for {}...", ncode);
-                let novel = import::syosetsu::fetch_novel_info(&ncode)?;
+                let novel = import::syosetu::fetch_novel_info(&ncode)?;
                 println!("Title: {}", novel.title);
                 println!("Author: {}", novel.author);
                 println!("Chapters: {}", novel.total_chapters);
@@ -182,7 +182,7 @@ fn main() -> Result<()> {
                     println!("  {:>4}. {}", ch.number, ch.title);
                 }
                 println!();
-                println!("Import a chapter with: kotoba syosetsu {} --chapter <N>", ncode);
+                println!("Import a chapter with: kotoba syosetu {} --chapter <N>", ncode);
             }
         }
         Commands::Run => {
@@ -275,6 +275,10 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             return;
         }
         KeyCode::Tab => {
+            // Save reading progress before leaving reader
+            if app.screen == Screen::Reader {
+                let _ = app.save_reading_progress();
+            }
             app.screen = app.screen.next();
             if app.screen == Screen::Library {
                 let _ = app.refresh_library();
@@ -291,7 +295,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
     match app.screen {
         Screen::Library => handle_library_key(app, key),
         Screen::Reader => handle_reader_key(app, key),
-        Screen::Syosetsu => handle_syosetsu_key(app, key),
+        Screen::Syosetu => handle_syosetu_key(app, key),
         Screen::Review => {}
         Screen::Stats => {}
     }
@@ -337,7 +341,10 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             _ => {}
         },
         PopupState::QuitConfirm => match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => app.should_quit = true,
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let _ = app.save_reading_progress();
+                app.should_quit = true;
+            }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.popup = None,
             _ => {}
         },
@@ -367,6 +374,12 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             }
             KeyCode::Char('u') => {
                 app.popup = Some(PopupState::UrlInput { text: String::new() });
+            }
+            KeyCode::Char('f') => {
+                app.popup = Some(PopupState::FilePathInput { text: String::new() });
+            }
+            KeyCode::Char('s') => {
+                app.popup = Some(PopupState::SyosetuInput { text: String::new() });
             }
             _ => {}
         },
@@ -415,6 +428,54 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             }
             KeyCode::Char(c) => {
                 if let Some(PopupState::SearchInput { ref mut text }) = app.popup {
+                    text.push(c);
+                }
+            }
+            _ => {}
+        },
+        PopupState::FilePathInput { .. } => match key.code {
+            KeyCode::Esc => app.popup = None,
+            KeyCode::Enter => {
+                if let Some(PopupState::FilePathInput { ref text }) = app.popup {
+                    let path = text.clone();
+                    app.popup = None;
+                    match app.import_file_path(&path) {
+                        Ok(result) => app.set_message(format!("Imported: {}", result)),
+                        Err(e) => app.set_message(format!("File import failed: {}", e)),
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(PopupState::FilePathInput { ref mut text }) = app.popup {
+                    text.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(PopupState::FilePathInput { ref mut text }) = app.popup {
+                    text.push(c);
+                }
+            }
+            _ => {}
+        },
+        PopupState::SyosetuInput { .. } => match key.code {
+            KeyCode::Esc => app.popup = None,
+            KeyCode::Enter => {
+                if let Some(PopupState::SyosetuInput { ref text }) = app.popup {
+                    let ncode = text.clone();
+                    app.popup = None;
+                    match app.load_syosetu(&ncode) {
+                        Ok(()) => app.set_message("Syosetu novel loaded"),
+                        Err(e) => app.set_message(format!("Syosetu load failed: {}", e)),
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(PopupState::SyosetuInput { ref mut text }) = app.popup {
+                    text.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(PopupState::SyosetuInput { ref mut text }) = app.popup {
                     text.push(c);
                 }
             }
@@ -483,22 +544,22 @@ fn handle_library_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn handle_syosetsu_key(app: &mut App, key: KeyEvent) {
+fn handle_syosetu_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(ref mut state) = app.syosetsu_state {
+            if let Some(ref mut state) = app.syosetu_state {
                 state.selected_chapter = state.selected_chapter.saturating_sub(1);
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(ref mut state) = app.syosetsu_state {
+            if let Some(ref mut state) = app.syosetu_state {
                 let max = state.novel.chapters.len().saturating_sub(1);
                 state.selected_chapter = (state.selected_chapter + 1).min(max);
             }
         }
         KeyCode::Enter => {
             // Import selected chapter and open in reader
-            let info = app.syosetsu_state.as_ref().map(|s| {
+            let info = app.syosetu_state.as_ref().map(|s| {
                 let ch = &s.novel.chapters[s.selected_chapter];
                 (s.novel.ncode.clone(), ch.number, ch.text_id)
             });
@@ -518,10 +579,10 @@ fn handle_syosetsu_key(app: &mut App, key: KeyEvent) {
                             return;
                         }
                     };
-                    match crate::import::syosetsu::import_chapter_quiet(&ncode, chapter_num, &conn) {
+                    match crate::import::syosetu::import_chapter_quiet(&ncode, chapter_num, &conn) {
                         Ok((text_id, title)) => {
                             // Update the chapter's text_id
-                            if let Some(ref mut state) = app.syosetsu_state {
+                            if let Some(ref mut state) = app.syosetu_state {
                                 state.novel.chapters[state.selected_chapter].text_id = Some(text_id);
                             }
                             app.set_message(format!("Imported: {}", title));
@@ -556,6 +617,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                     state.sidebar_scroll = 0;
                 }
             }
+            let _ = app.save_reading_progress();
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(ref mut state) = app.reader_state {
@@ -565,6 +627,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                     state.sidebar_scroll = 0;
                 }
             }
+            let _ = app.save_reading_progress();
         }
 
         // Word navigation
@@ -678,10 +741,19 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        // Deselect word
+        // Deselect word, or go back to library if no word selected
         KeyCode::Esc => {
-            if let Some(ref mut state) = app.reader_state {
-                state.word_index = None;
+            let has_word = app.reader_state.as_ref()
+                .map(|s| s.word_index.is_some())
+                .unwrap_or(false);
+            if has_word {
+                if let Some(ref mut state) = app.reader_state {
+                    state.word_index = None;
+                }
+            } else {
+                if let Err(e) = app.back_to_library() {
+                    app.set_message(format!("Error: {}", e));
+                }
             }
         }
 

@@ -525,6 +525,25 @@ pub fn list_texts_by_source_type(conn: &Connection, source_type: &str) -> Result
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
+/// Save reading progress (sentence index) for a text.
+pub fn save_reading_progress(conn: &Connection, text_id: i64, sentence_index: usize) -> Result<()> {
+    conn.execute(
+        "UPDATE texts SET last_sentence_index = ?1 WHERE id = ?2",
+        params![sentence_index as i64, text_id],
+    )?;
+    Ok(())
+}
+
+/// Get saved reading progress for a text.
+pub fn get_reading_progress(conn: &Connection, text_id: i64) -> Result<usize> {
+    let idx: i64 = conn.query_row(
+        "SELECT last_sentence_index FROM texts WHERE id = ?1",
+        params![text_id],
+        |r| r.get(0),
+    ).unwrap_or(0);
+    Ok(idx as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,13 +4,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, SyosetsuState};
+use crate::app::{App, SyosetuState};
 
-/// Render the Syosetsu novel browser screen.
+/// Render the Syosetu novel browser screen.
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.size();
 
-    let state = match app.syosetsu_state.as_ref() {
+    let state = match app.syosetu_state.as_ref() {
         Some(s) => s,
         None => {
             // Show input prompt for ncode
@@ -35,7 +35,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" — Syosetsu Browser"),
+        Span::raw(" — Syosetu Browser"),
         Span::raw("  "),
         Span::styled("[?]help", Style::default().fg(Color::DarkGray)),
     ]);
@@ -145,7 +145,7 @@ fn render_ncode_input(frame: &mut Frame, _app: &App) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" — Syosetsu Browser"),
+        Span::raw(" — Syosetu Browser"),
     ]);
     frame.render_widget(
         Paragraph::new(title).style(Style::default().bg(Color::Rgb(30, 30, 50))),
@@ -159,14 +159,14 @@ fn render_ncode_input(frame: &mut Frame, _app: &App) {
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(""),
-        Line::from("Use the CLI to browse a Syosetsu novel:"),
-        Line::from("  kotoba syosetsu <ncode-or-url>"),
+        Line::from("Use the CLI to browse a Syosetu novel:"),
+        Line::from("  kotoba syosetu <ncode-or-url>"),
         Line::from(""),
         Line::from("Or press Esc to go back to Library."),
     ])
     .block(
         Block::default()
-            .title(" Syosetsu ")
+            .title(" Syosetu ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Blue)),
     );

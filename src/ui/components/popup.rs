@@ -145,14 +145,16 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from("  i           — Set Ignored status"),
                 Line::from("  Enter       — Word detail popup"),
                 Line::from("  n           — Edit word note"),
-                Line::from("  Esc         — Deselect word / close popup"),
+                Line::from("  Esc         — Deselect word / back to Library"),
                 Line::from(""),
                 Line::from(Span::styled("Library:", Style::default().add_modifier(Modifier::BOLD))),
                 Line::from("  ↑/↓         — Navigate texts"),
                 Line::from("  Enter       — Open text in Reader"),
                 Line::from("  d           — Delete selected text"),
-                Line::from("  i           — Import (clipboard/URL)"),
+                Line::from("  i           — Import (clipboard/URL/file/syosetu)"),
                 Line::from("  /           — Search texts by title"),
+                Line::from("  s           — Cycle sort mode"),
+                Line::from("  f           — Cycle source filter"),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Press Esc or ? to close",
@@ -252,7 +254,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
         }
 
         PopupState::ImportMenu => {
-            let area = centered_rect(40, 25, frame.size());
+            let area = centered_rect(45, 30, frame.size());
             frame.render_widget(Clear, area);
 
             let lines = vec![
@@ -264,15 +266,8 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from(""),
                 Line::from("  c — Clipboard"),
                 Line::from("  u — URL (web page)"),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "For files, EPUBs, subtitles, and Syosetsu:",
-                    Style::default().fg(Color::DarkGray),
-                )),
-                Line::from(Span::styled(
-                    "use the CLI: kotoba import <file>",
-                    Style::default().fg(Color::DarkGray),
-                )),
+                Line::from("  f — File (text / .srt / .ass / .epub)"),
+                Line::from("  s — Syosetu novel (ncode)"),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Esc to cancel",
@@ -313,6 +308,68 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
             let block = Block::default()
                 .title(" URL Import ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+
+        PopupState::FilePathInput { text } => {
+            let area = centered_rect(60, 20, frame.size());
+            frame.render_widget(Clear, area);
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Enter file path (.txt / .srt / .ass / .epub):",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("▎{}_", text),
+                    Style::default().fg(Color::Cyan),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Enter to import • Esc to cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let block = Block::default()
+                .title(" File Import ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+
+        PopupState::SyosetuInput { text } => {
+            let area = centered_rect(60, 20, frame.size());
+            frame.render_widget(Clear, area);
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Enter Syosetu ncode or URL:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("▎{}_", text),
+                    Style::default().fg(Color::Cyan),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Enter to load novel • Esc to cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let block = Block::default()
+                .title(" Syosetu Import ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Green));
 
