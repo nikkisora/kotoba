@@ -483,6 +483,35 @@ fn run_import_task(
 
             // Phase 2: Short DB transaction for writes only
             let conn = connection::open_or_create(&task.db_path)?;
+
+            // Always prefer DB-sourced novel title and chapter subtitle (from ToC)
+            // over the per-chapter-page scrape, which can miss selectors.
+            let title = {
+                let novel_title = models::get_web_source_by_id(&conn, task.source_id)
+                    .ok()
+                    .flatten()
+                    .map(|ws| ws.title)
+                    .unwrap_or_default();
+                let chapter_subtitle = models::list_chapters_by_source(&conn, task.source_id)
+                    .ok()
+                    .and_then(|chs| {
+                        chs.into_iter()
+                            .find(|c| c.id == task.chapter_id)
+                            .map(|c| c.title)
+                    })
+                    .unwrap_or_default();
+                if !novel_title.is_empty() && !chapter_subtitle.is_empty() {
+                    crate::import::syosetu::format_chapter_title(
+                        &novel_title,
+                        task.chapter_number as usize,
+                        &chapter_subtitle,
+                    )
+                } else {
+                    // Fall back to the title scraped from the chapter page
+                    title
+                }
+            };
+
             let text_id = crate::import::text::write_pretokenized(
                 &title,
                 &content,

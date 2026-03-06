@@ -40,14 +40,87 @@ fn has_kanji(s: &str) -> bool {
     })
 }
 
+/// Compute the exact height (in terminal rows) a sentence would occupy when rendered.
+/// Uses the same layout algorithm as `render_sentence` but without writing to a buffer.
+pub fn sentence_height(
+    tokens: &[TokenDisplay],
+    width: u16,
+    show_furigana: bool,
+    is_current: bool,
+    force_all_furigana: bool,
+) -> u16 {
+    if width < 2 {
+        return 0;
+    }
+
+    let usable_width = width as usize;
+    let mut any_furigana = false;
+
+    let slot_widths: Vec<usize> = tokens
+        .iter()
+        .map(|t| {
+            let surface_width = UnicodeWidthStr::width(t.surface.as_str());
+            let furigana_reading = if !t.surface_reading.is_empty() {
+                &t.surface_reading
+            } else {
+                &t.reading
+            };
+            let needs = show_furigana
+                && has_kanji(&t.surface)
+                && !furigana_reading.is_empty()
+                && t.surface != furigana_reading.as_str()
+                && !t.is_trivial
+                && (force_all_furigana
+                    || matches!(
+                        t.vocabulary_status,
+                        VocabularyStatus::New
+                            | VocabularyStatus::Learning1
+                            | VocabularyStatus::Learning2
+                            | VocabularyStatus::Learning3
+                    ));
+            if needs {
+                any_furigana = true;
+                let reading_width = UnicodeWidthStr::width(furigana_reading.as_str());
+                surface_width.max(reading_width)
+            } else {
+                surface_width
+            }
+        })
+        .collect();
+
+    let line_height: u16 = if any_furigana { 2 } else { 1 };
+    let text_width = usable_width.saturating_sub(if is_current { 2 } else { 0 });
+    if text_width == 0 {
+        return line_height;
+    }
+
+    let mut lines_used: u16 = 0;
+    let mut col: usize = 0;
+
+    for &sw in &slot_widths {
+        if col + sw > text_width && col > 0 {
+            lines_used += 1;
+            col = 0;
+        }
+        col += sw;
+    }
+
+    (lines_used + 1) * line_height
+}
+
 /// Render a sentence with furigana into a buffer area.
 /// Returns the number of lines consumed (each token pair = 2 lines if furigana shown).
+///
+/// When `force_all_furigana` is true, furigana is shown for all kanji words regardless
+/// of vocabulary status (used in sidebar). When false, furigana respects the status-based
+/// rules (hidden for Learning4, Known, Ignored).
 pub fn render_sentence(
     tokens: &[TokenDisplay],
     area: Rect,
     buf: &mut Buffer,
     show_furigana: bool,
     is_current: bool,
+    force_all_furigana: bool,
 ) -> u16 {
     if area.width < 2 || area.height < 1 {
         return 0;
@@ -82,13 +155,14 @@ pub fn render_sentence(
                 && !furigana_reading.is_empty()
                 && t.surface != furigana_reading.as_str()
                 && !t.is_trivial
-                && matches!(
-                    t.vocabulary_status,
-                    VocabularyStatus::New
-                        | VocabularyStatus::Learning1
-                        | VocabularyStatus::Learning2
-                        | VocabularyStatus::Learning3
-                );
+                && (force_all_furigana
+                    || matches!(
+                        t.vocabulary_status,
+                        VocabularyStatus::New
+                            | VocabularyStatus::Learning1
+                            | VocabularyStatus::Learning2
+                            | VocabularyStatus::Learning3
+                    ));
             let reading_width = if needs_furigana {
                 UnicodeWidthStr::width(furigana_reading.as_str())
             } else {

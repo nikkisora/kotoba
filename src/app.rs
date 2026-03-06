@@ -88,6 +88,15 @@ pub struct ParagraphData {
     pub db_tokens: Vec<models::Token>,
 }
 
+/// A batch of words that were autopromoted from New to Known on a single sentence advance.
+#[derive(Debug, Clone)]
+pub struct AutopromotionBatch {
+    /// Which sentence the user was leaving when this batch was created.
+    pub sentence_index: usize,
+    /// The words that were promoted: (base_form, reading, vocabulary_id).
+    pub words: Vec<(String, String, i64)>,
+}
+
 /// State for the reader screen.
 pub struct ReaderState {
     pub text_id: i64,
@@ -101,6 +110,14 @@ pub struct ReaderState {
     pub gloss_cache: HashMap<String, String>,
     pub scroll_offset: usize,
     pub sidebar_scroll: usize,
+    /// Whether autopromotion of New words to Known is active (per-session, default true).
+    pub autopromote_enabled: bool,
+    /// Undo stack: each entry is a batch of words autopromoted on a single sentence advance.
+    pub autopromote_history: Vec<AutopromotionBatch>,
+    /// Whether to show readings for all words in the sidebar (per-session toggle, default false).
+    pub show_all_readings: bool,
+    /// Whether to show Known/Ignored words in the sidebar word list (per-session toggle, default false).
+    pub show_known_in_sidebar: bool,
 }
 
 /// How the library list is sorted.
@@ -237,6 +254,8 @@ pub struct HomeState {
     pub recent_texts: Vec<models::Text>,
     pub recent_stats: HashMap<i64, TextStats>,
     pub selected: usize,
+    /// Whether to show finished texts in the recent list (default false).
+    pub show_finished: bool,
 }
 
 /// Central application state.
@@ -547,15 +566,16 @@ impl App {
                 stats.insert(t.id, s);
             }
         }
-        let selected = self
-            .home_state
-            .as_ref()
+        let prev = self.home_state.as_ref();
+        let show_finished = prev.map(|s| s.show_finished).unwrap_or(false);
+        let selected = prev
             .map(|s| s.selected.min(recent.len().saturating_sub(1)))
             .unwrap_or(0);
         self.home_state = Some(HomeState {
             recent_texts: recent,
             recent_stats: stats,
             selected,
+            show_finished,
         });
         Ok(())
     }
@@ -810,6 +830,10 @@ impl App {
             gloss_cache,
             scroll_offset: 0,
             sidebar_scroll: 0,
+            autopromote_enabled: true,
+            autopromote_history: Vec::new(),
+            show_all_readings: false,
+            show_known_in_sidebar: false,
         });
 
         self.previous_screen = Some(self.screen.clone());
@@ -887,6 +911,130 @@ impl App {
             VocabularyStatus::Known => "Known",
         };
         self.set_message(format!("{} → {}", base_form, status_name));
+        Ok(())
+    }
+
+    /// Autopromote all New words in the given sentence to Known.
+    /// Called when advancing past a sentence. Returns the number of words promoted.
+    pub fn autopromote_sentence(&mut self, sentence_index: usize) -> Result<usize> {
+        let state = match self.reader_state.as_ref() {
+            Some(s) => s,
+            None => return Ok(0),
+        };
+
+        if !state.autopromote_enabled {
+            return Ok(0);
+        }
+
+        if sentence_index >= state.sentences.len() {
+            return Ok(0);
+        }
+
+        // Collect New words from the departing sentence (deduplicated by base_form+reading)
+        let mut seen = std::collections::HashSet::new();
+        let mut to_promote: Vec<(String, String)> = Vec::new();
+        for token in &state.sentences[sentence_index].tokens {
+            if token.is_trivial {
+                continue;
+            }
+            if token.vocabulary_status != VocabularyStatus::New {
+                continue;
+            }
+            let key = (token.base_form.clone(), token.reading.clone());
+            if seen.insert(key.clone()) {
+                to_promote.push(key);
+            }
+        }
+
+        if to_promote.is_empty() {
+            return Ok(0);
+        }
+
+        let conn = self.open_db()?;
+        let mut batch_words: Vec<(String, String, i64)> = Vec::new();
+
+        for (base_form, reading) in &to_promote {
+            let vid = models::upsert_vocabulary(&conn, base_form, reading, "")?;
+            // Only promote if still New in DB (may have been changed by manual action)
+            if let Some(vocab) = models::get_vocabulary_by_id(&conn, vid)? {
+                if vocab.status == VocabularyStatus::New {
+                    models::update_vocabulary_status(&conn, vid, VocabularyStatus::Known)?;
+                    batch_words.push((base_form.clone(), reading.clone(), vid));
+                }
+            }
+        }
+
+        let count = batch_words.len();
+
+        if count > 0 {
+            // Update in-memory cache and patch all tokens
+            if let Some(ref mut state) = self.reader_state {
+                for (base_form, reading, vid) in &batch_words {
+                    if let Some(vocab) = models::get_vocabulary_by_id(&conn, *vid)? {
+                        state
+                            .vocabulary_cache
+                            .insert((base_form.clone(), reading.clone()), vocab);
+                    }
+                    for sentence in &mut state.sentences {
+                        for token in &mut sentence.tokens {
+                            if token.base_form == *base_form && token.reading == *reading {
+                                token.vocabulary_status = VocabularyStatus::Known;
+                            }
+                        }
+                    }
+                }
+
+                // Push onto undo stack
+                state.autopromote_history.push(AutopromotionBatch {
+                    sentence_index,
+                    words: batch_words,
+                });
+            }
+        }
+
+        Ok(count)
+    }
+
+    /// Undo the most recent autopromotion batch, reverting words to New.
+    pub fn undo_last_autopromote(&mut self) -> Result<()> {
+        let batch = match self.reader_state.as_mut() {
+            Some(state) => match state.autopromote_history.pop() {
+                Some(b) => b,
+                None => {
+                    self.set_message("Nothing to undo");
+                    return Ok(());
+                }
+            },
+            None => return Ok(()),
+        };
+
+        let conn = self.open_db()?;
+
+        for (base_form, reading, vid) in &batch.words {
+            models::update_vocabulary_status(&conn, *vid, VocabularyStatus::New)?;
+
+            // Update in-memory cache and patch all tokens
+            if let Some(ref mut state) = self.reader_state {
+                if let Some(vocab) = models::get_vocabulary_by_id(&conn, *vid)? {
+                    state
+                        .vocabulary_cache
+                        .insert((base_form.clone(), reading.clone()), vocab);
+                }
+                for sentence in &mut state.sentences {
+                    for token in &mut sentence.tokens {
+                        if token.base_form == *base_form && token.reading == *reading {
+                            token.vocabulary_status = VocabularyStatus::New;
+                        }
+                    }
+                }
+            }
+        }
+
+        self.set_message(format!(
+            "Undo: {} words reverted to New (sentence {})",
+            batch.words.len(),
+            batch.sentence_index + 1,
+        ));
         Ok(())
     }
 
@@ -1403,7 +1551,6 @@ fn is_trivial_pos(pos: &str, surface: &str) -> bool {
             | "Auxiliary"
             | "Conjunction"
             | "Prefix"
-            | "Suffix"
     ) || surface.trim().is_empty()
         || is_numeric(surface)
         || is_ascii_only(surface)

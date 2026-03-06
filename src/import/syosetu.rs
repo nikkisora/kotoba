@@ -253,6 +253,21 @@ pub fn fetch_novel_info(ncode: &str) -> Result<SyosetuNovel> {
     })
 }
 
+/// Format the title for a syosetu chapter text stored in the DB.
+/// Produces: "Novel Title — Chapter Subtitle" (with novel name for context).
+/// If the novel title is empty/unavailable, falls back to "Ch.N: Chapter Subtitle".
+pub fn format_chapter_title(
+    novel_title: &str,
+    chapter_number: usize,
+    chapter_subtitle: &str,
+) -> String {
+    if novel_title.is_empty() {
+        format!("Ch.{} — {}", chapter_number, chapter_subtitle)
+    } else {
+        format!("{} — {}", novel_title, chapter_subtitle)
+    }
+}
+
 /// Try multiple CSS selectors and return the text of the first match.
 fn try_select_text(document: &Html, selectors: &[&str]) -> Option<String> {
     for sel_str in selectors {
@@ -294,8 +309,10 @@ pub fn import_chapter(ncode: &str, chapter: usize, conn: &Connection) -> Result<
 
     let document = Html::parse_document(&html);
 
-    // Extract chapter title (try new layout, then legacy)
-    let chapter_title = try_select_text(&document, &[".p-novel__subtitle", ".novel_subtitle"])
+    // Extract novel title and chapter subtitle from the page
+    let novel_title =
+        try_select_text(&document, &[".p-novel__title a", ".novel_title"]).unwrap_or_default();
+    let chapter_subtitle = try_select_text(&document, &[".p-novel__subtitle", ".novel_subtitle"])
         .unwrap_or_else(|| format!("Chapter {}", chapter));
 
     let content = extract_chapter_content(&document)?;
@@ -304,7 +321,7 @@ pub fn import_chapter(ncode: &str, chapter: usize, conn: &Connection) -> Result<
         anyhow::bail!("Could not extract chapter text from {}", url);
     }
 
-    let title = format!("{} — Ch.{}", chapter_title, chapter);
+    let title = format_chapter_title(&novel_title, chapter, &chapter_subtitle);
     text::import_text(&title, &content, "syosetu", Some(&url), conn)
 }
 
@@ -325,7 +342,10 @@ pub fn fetch_chapter_content(ncode: &str, chapter: usize) -> Result<(String, Str
     let html = client.get(&url).send()?.text()?;
     let document = Html::parse_document(&html);
 
-    let chapter_title = try_select_text(&document, &[".p-novel__subtitle", ".novel_subtitle"])
+    // Extract novel title and chapter subtitle from the page
+    let novel_title =
+        try_select_text(&document, &[".p-novel__title a", ".novel_title"]).unwrap_or_default();
+    let chapter_subtitle = try_select_text(&document, &[".p-novel__subtitle", ".novel_subtitle"])
         .unwrap_or_else(|| format!("Chapter {}", chapter));
 
     let content = extract_chapter_content(&document)?;
@@ -334,7 +354,7 @@ pub fn fetch_chapter_content(ncode: &str, chapter: usize) -> Result<(String, Str
         anyhow::bail!("Could not extract chapter text");
     }
 
-    let title = format!("{} — Ch.{}", chapter_title, chapter);
+    let title = format_chapter_title(&novel_title, chapter, &chapter_subtitle);
     Ok((title, content, url))
 }
 
@@ -358,7 +378,10 @@ pub fn import_chapter_quiet(
     let html = client.get(&url).send()?.text()?;
     let document = Html::parse_document(&html);
 
-    let chapter_title = try_select_text(&document, &[".p-novel__subtitle", ".novel_subtitle"])
+    // Extract novel title and chapter subtitle from the page
+    let novel_title =
+        try_select_text(&document, &[".p-novel__title a", ".novel_title"]).unwrap_or_default();
+    let chapter_subtitle = try_select_text(&document, &[".p-novel__subtitle", ".novel_subtitle"])
         .unwrap_or_else(|| format!("Chapter {}", chapter));
 
     let content = extract_chapter_content(&document)?;
@@ -367,7 +390,7 @@ pub fn import_chapter_quiet(
         anyhow::bail!("Could not extract chapter text");
     }
 
-    let title = format!("{} — Ch.{}", chapter_title, chapter);
+    let title = format_chapter_title(&novel_title, chapter, &chapter_subtitle);
     let text_id = text::import_text_quiet(&title, &content, "syosetu", Some(&url), conn)?;
     Ok((text_id, title))
 }
@@ -564,5 +587,17 @@ mod tests {
         let text = extract_novel_text(&elem);
         assert!(text.contains("第一行です。"));
         assert!(text.contains("第二行です。"));
+    }
+
+    #[test]
+    fn test_format_chapter_title_with_novel() {
+        let title = format_chapter_title("転生したらスライムだった件", 5, "リムルの決意");
+        assert_eq!(title, "転生したらスライムだった件 — リムルの決意");
+    }
+
+    #[test]
+    fn test_format_chapter_title_no_novel() {
+        let title = format_chapter_title("", 5, "リムルの決意");
+        assert_eq!(title, "Ch.5 — リムルの決意");
     }
 }

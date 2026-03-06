@@ -46,108 +46,126 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     // Content
     let home = app.home_state.as_ref();
-    let recent = home.map(|h| &h.recent_texts);
+    let show_finished = home.map(|h| h.show_finished).unwrap_or(false);
     let selected = home.map(|h| h.selected).unwrap_or(0);
 
-    match recent {
-        Some(texts) if !texts.is_empty() => {
-            let stats_map = home.map(|h| &h.recent_stats);
-
-            let items: Vec<ListItem> = texts
+    // Filter recent texts: hide finished unless toggled
+    let filtered: Vec<&crate::db::models::Text> = home
+        .map(|h| {
+            h.recent_texts
                 .iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    let marker = if i == selected { "▶ " } else { "  " };
-                    let style = if i == selected {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default()
-                    };
-
-                    let pbar =
-                        progress_bar(t.last_sentence_index as u64, t.total_sentences as u64, 12);
-                    let pct = if t.total_sentences > 0 {
-                        (t.last_sentence_index * 100 / t.total_sentences) as u8
-                    } else {
-                        0
-                    };
-
-                    let stats_str = stats_map
-                        .and_then(|m| m.get(&t.id))
-                        .map(|s| {
-                            let kpct = if s.unique_vocab == 0 {
-                                0
-                            } else {
-                                s.known_count * 100 / s.unique_vocab
-                            };
-                            let lpct = if s.unique_vocab == 0 {
-                                0
-                            } else {
-                                s.learning_count * 100 / s.unique_vocab
-                            };
-                            let npct = if s.unique_vocab == 0 {
-                                0
-                            } else {
-                                s.new_count * 100 / s.unique_vocab
-                            };
-                            format!("  K:{}% L:{}% N:{}%", kpct, lpct, npct)
-                        })
-                        .unwrap_or_default();
-
-                    ListItem::new(Line::from(vec![
-                        Span::styled(marker, style),
-                        Span::styled(&t.title, style),
-                        Span::raw("  "),
-                        Span::styled(
-                            format!("{} {}%", pbar, pct),
-                            Style::default().fg(Color::Rgb(100, 180, 100)),
-                        ),
-                        Span::styled(stats_str, Style::default().fg(Color::Rgb(100, 140, 180))),
-                    ]))
+                .filter(|t| {
+                    if show_finished {
+                        return true;
+                    }
+                    // Not finished: total_sentences == 0 or last_sentence_index < total_sentences - 1
+                    t.total_sentences == 0 || t.last_sentence_index < t.total_sentences - 1
                 })
-                .collect();
+                .collect()
+        })
+        .unwrap_or_default();
 
-            let list = List::new(items).block(
-                Block::default()
-                    .title(" Recently Read ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Blue)),
-            );
-            frame.render_widget(list, outer[1]);
-        }
-        _ => {
-            let msg = Paragraph::new(vec![
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Welcome to kotoba!",
+    if !filtered.is_empty() {
+        let stats_map = home.map(|h| &h.recent_stats);
+
+        let items: Vec<ListItem> = filtered
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let marker = if i == selected { "▶ " } else { "  " };
+                let style = if i == selected {
                     Style::default()
                         .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(""),
-                Line::from("No texts read yet. Get started:"),
-                Line::from("  [l] Open Library"),
-                Line::from("  [i] Import text (clipboard, URL, file, Syosetu)"),
-                Line::from(""),
-                Line::from("Or use the CLI:"),
-                Line::from("  kotoba import <file>"),
-                Line::from("  kotoba syosetu <ncode>"),
-            ])
-            .block(
-                Block::default()
-                    .title(" Home ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Blue)),
-            );
-            frame.render_widget(msg, outer[1]);
-        }
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+
+                let progress = (t.last_sentence_index + 1).min(t.total_sentences);
+                let pbar = progress_bar(progress as u64, t.total_sentences as u64, 12);
+                let pct = if t.total_sentences > 0 {
+                    (progress * 100 / t.total_sentences) as u8
+                } else {
+                    0
+                };
+
+                let stats_str = stats_map
+                    .and_then(|m| m.get(&t.id))
+                    .map(|s| {
+                        let kpct = if s.unique_vocab == 0 {
+                            0
+                        } else {
+                            s.known_count * 100 / s.unique_vocab
+                        };
+                        let lpct = if s.unique_vocab == 0 {
+                            0
+                        } else {
+                            s.learning_count * 100 / s.unique_vocab
+                        };
+                        let npct = if s.unique_vocab == 0 {
+                            0
+                        } else {
+                            s.new_count * 100 / s.unique_vocab
+                        };
+                        format!("  K:{}% L:{}% N:{}%", kpct, lpct, npct)
+                    })
+                    .unwrap_or_default();
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(marker, style),
+                    Span::styled(&t.title, style),
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{} {}%", pbar, pct),
+                        Style::default().fg(Color::Rgb(100, 180, 100)),
+                    ),
+                    Span::styled(stats_str, Style::default().fg(Color::Rgb(100, 140, 180))),
+                ]))
+            })
+            .collect();
+
+        let block_title = if show_finished {
+            " Recently Read (all) [f] "
+        } else {
+            " Recently Read (in progress) [f] "
+        };
+        let list = List::new(items).block(
+            Block::default()
+                .title(block_title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Blue)),
+        );
+        frame.render_widget(list, outer[1]);
+    } else {
+        let msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "Welcome to kotoba!",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("No texts read yet. Get started:"),
+            Line::from("  [l] Open Library"),
+            Line::from("  [i] Import text (clipboard, URL, file, Syosetu)"),
+            Line::from(""),
+            Line::from("Or use the CLI:"),
+            Line::from("  kotoba import <file>"),
+            Line::from("  kotoba syosetu <ncode>"),
+        ])
+        .block(
+            Block::default()
+                .title(" Home ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Blue)),
+        );
+        frame.render_widget(msg, outer[1]);
     }
 
     // Status bar
     let status = Line::from(vec![Span::styled(
-        " ↑↓:navigate  Enter:open  l:library  r:review  i:import  Tab:reader  q:quit  ?:help ",
+        " ↑↓:navigate  Enter:open  f:toggle finished  l:library  i:import  Tab:reader  q:quit  ?:help ",
         Style::default().fg(Color::DarkGray),
     )]);
     frame.render_widget(

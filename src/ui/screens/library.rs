@@ -117,13 +117,10 @@ pub fn render(frame: &mut Frame, app: &App) {
 
                 let detail_str = match item {
                     LibraryItem::Text(t) => {
-                        let pbar = progress_bar(
-                            t.last_sentence_index as u64,
-                            t.total_sentences as u64,
-                            10,
-                        );
+                        let progress = (t.last_sentence_index + 1).min(t.total_sentences);
+                        let pbar = progress_bar(progress as u64, t.total_sentences as u64, 10);
                         let pct = if t.total_sentences > 0 {
-                            (t.last_sentence_index * 100 / t.total_sentences) as u8
+                            (progress * 100 / t.total_sentences) as u8
                         } else {
                             0
                         };

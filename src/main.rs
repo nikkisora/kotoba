@@ -578,6 +578,20 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
     }
 }
 
+/// Get the filtered recent texts for the home screen.
+fn home_filtered_texts(home: &app::HomeState) -> Vec<usize> {
+    home.recent_texts
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| {
+            home.show_finished
+                || t.total_sentences == 0
+                || t.last_sentence_index < t.total_sentences - 1
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
 fn handle_home_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
@@ -587,21 +601,32 @@ fn handle_home_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(ref mut home) = app.home_state {
-                let max = home.recent_texts.len().saturating_sub(1);
+                let filtered = home_filtered_texts(home);
+                let max = filtered.len().saturating_sub(1);
                 home.selected = (home.selected + 1).min(max);
             }
         }
         KeyCode::Enter => {
-            let text_id = app
-                .home_state
-                .as_ref()
-                .and_then(|h| h.recent_texts.get(h.selected))
-                .map(|t| t.id);
+            let text_id = app.home_state.as_ref().and_then(|h| {
+                let filtered = home_filtered_texts(h);
+                filtered
+                    .get(h.selected)
+                    .and_then(|&idx| h.recent_texts.get(idx))
+                    .map(|t| t.id)
+            });
             if let Some(id) = text_id {
                 app.previous_screen = Some(Screen::Home);
                 if let Err(e) = app.load_text(id) {
                     app.set_message(format!("Error loading text: {}", e));
                 }
+            }
+        }
+        KeyCode::Char('f') => {
+            if let Some(ref mut home) = app.home_state {
+                home.show_finished = !home.show_finished;
+                // Clamp selection to new filtered list length
+                let filtered = home_filtered_texts(home);
+                home.selected = home.selected.min(filtered.len().saturating_sub(1));
             }
         }
         KeyCode::Char('l') => {
@@ -874,11 +899,28 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
             let _ = app.save_reading_progress();
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(ref mut state) = app.reader_state {
-                if state.sentence_index + 1 < state.sentences.len() {
-                    state.sentence_index += 1;
-                    state.word_index = None;
-                    state.sidebar_scroll = 0;
+            let departing = {
+                let result = if let Some(ref mut state) = app.reader_state {
+                    if state.sentence_index + 1 < state.sentences.len() {
+                        let dep = state.sentence_index;
+                        state.sentence_index += 1;
+                        state.word_index = None;
+                        state.sidebar_scroll = 0;
+                        Some((dep, false)) // (departing_index, is_at_end)
+                    } else {
+                        Some((state.sentence_index, true))
+                    }
+                } else {
+                    None
+                };
+                result
+            };
+            if let Some((dep, is_at_end)) = departing {
+                if let Err(e) = app.autopromote_sentence(dep) {
+                    app.set_message(format!("Autopromote error: {}", e));
+                }
+                if is_at_end {
+                    app.set_message("End of text. Press Esc to return.");
                 }
             }
             let _ = app.save_reading_progress();
@@ -919,34 +961,55 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Right | KeyCode::Char('l') => {
-            if let Some(ref mut state) = app.reader_state {
-                if state.sentences.is_empty() {
-                    return;
-                }
-                let sentence = &state.sentences[state.sentence_index];
-                match state.word_index {
-                    None => {
-                        state.word_index = sentence.tokens.iter().position(|t| !t.is_trivial);
-                    }
-                    Some(i) => {
-                        let next = sentence.tokens[i + 1..]
-                            .iter()
-                            .position(|t| !t.is_trivial)
-                            .map(|p| p + i + 1);
-                        match next {
-                            Some(n) => state.word_index = Some(n),
+            let departing: Option<(usize, bool)> = {
+                let mut advanced_from: Option<(usize, bool)> = None;
+                if let Some(ref mut state) = app.reader_state {
+                    if !state.sentences.is_empty() {
+                        let sentence = &state.sentences[state.sentence_index];
+                        match state.word_index {
                             None => {
-                                // Last word — advance to next sentence, select first word
-                                if state.sentence_index + 1 < state.sentences.len() {
-                                    state.sentence_index += 1;
-                                    state.sidebar_scroll = 0;
-                                    let next_sentence = &state.sentences[state.sentence_index];
-                                    state.word_index =
-                                        next_sentence.tokens.iter().position(|t| !t.is_trivial);
+                                state.word_index =
+                                    sentence.tokens.iter().position(|t| !t.is_trivial);
+                            }
+                            Some(i) => {
+                                let next = sentence.tokens[i + 1..]
+                                    .iter()
+                                    .position(|t| !t.is_trivial)
+                                    .map(|p| p + i + 1);
+                                match next {
+                                    Some(n) => state.word_index = Some(n),
+                                    None => {
+                                        // Last word — advance to next sentence, select first word
+                                        if state.sentence_index + 1 < state.sentences.len() {
+                                            let dep = state.sentence_index;
+                                            state.sentence_index += 1;
+                                            state.sidebar_scroll = 0;
+                                            let next_sentence =
+                                                &state.sentences[state.sentence_index];
+                                            state.word_index = next_sentence
+                                                .tokens
+                                                .iter()
+                                                .position(|t| !t.is_trivial);
+                                            advanced_from = Some((dep, false));
+                                        } else {
+                                            // Last word of last sentence
+                                            advanced_from = Some((state.sentence_index, true));
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+                }
+                advanced_from
+            };
+            if let Some((dep, is_at_end)) = departing {
+                if let Err(e) = app.autopromote_sentence(dep) {
+                    app.set_message(format!("Autopromote error: {}", e));
+                }
+                if is_at_end {
+                    app.set_message("End of text. Press Esc to return.");
+                    let _ = app.save_reading_progress();
                 }
             }
         }
@@ -994,6 +1057,48 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('n') => {
             if let Err(e) = app.open_note_editor() {
                 app.set_message(format!("Error: {}", e));
+            }
+        }
+
+        // Toggle showing Known/Ignored words in sidebar
+        KeyCode::Char('w') => {
+            if let Some(ref mut state) = app.reader_state {
+                state.show_known_in_sidebar = !state.show_known_in_sidebar;
+                let status = if state.show_known_in_sidebar {
+                    "showing all words"
+                } else {
+                    "hiding Known/Ignored"
+                };
+                app.set_message(format!("Sidebar: {}", status));
+            }
+        }
+
+        // Toggle sidebar readings for all words
+        KeyCode::Char('r') => {
+            if let Some(ref mut state) = app.reader_state {
+                state.show_all_readings = !state.show_all_readings;
+                let status = if state.show_all_readings { "ON" } else { "OFF" };
+                app.set_message(format!("Show all readings {}", status));
+            }
+        }
+
+        // Toggle autopromotion
+        KeyCode::Char('a') => {
+            if let Some(ref mut state) = app.reader_state {
+                state.autopromote_enabled = !state.autopromote_enabled;
+                let status = if state.autopromote_enabled {
+                    "ON"
+                } else {
+                    "OFF"
+                };
+                app.set_message(format!("Autopromotion {}", status));
+            }
+        }
+
+        // Undo last autopromotion batch
+        KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Err(e) = app.undo_last_autopromote() {
+                app.set_message(format!("Undo error: {}", e));
             }
         }
 

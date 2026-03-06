@@ -18,7 +18,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             scroll,
         } => {
             let area = centered_rect(60, 80, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let mut lines: Vec<Line> = Vec::new();
 
@@ -120,7 +120,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
         PopupState::Help => {
             let area = centered_rect(60, 70, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let lines = vec![
                 Line::from(Span::styled(
@@ -134,36 +134,40 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                     "Global:",
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
-                Line::from("  q / Ctrl+C  — Quit"),
-                Line::from("  Tab         — Cycle screens"),
-                Line::from("  ?           — Toggle this help"),
+                Line::from("  q / Ctrl+C - Quit"),
+                Line::from("  Tab        - Cycle screens"),
+                Line::from("  ?          - Toggle this help"),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Reader:",
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
-                Line::from("  ↑/k         — Previous sentence"),
-                Line::from("  ↓/j         — Next sentence"),
-                Line::from("  ←/h         — Previous word"),
-                Line::from("  →/l         — Next word"),
-                Line::from("  1-4         — Set Learning status 1-4"),
-                Line::from("  5           — Set Known status"),
-                Line::from("  i           — Set Ignored status"),
-                Line::from("  Enter       — Word detail popup"),
-                Line::from("  n           — Edit word note"),
-                Line::from("  Esc         — Deselect word / back to Library"),
+                Line::from("  Up/k       - Previous sentence"),
+                Line::from("  Down/j     - Next sentence"),
+                Line::from("  Left/h     - Previous word"),
+                Line::from("  Right/l    - Next word"),
+                Line::from("  1-4        - Set Learning status 1-4"),
+                Line::from("  5          - Set Known status"),
+                Line::from("  i          - Set Ignored status"),
+                Line::from("  Enter      - Word detail popup"),
+                Line::from("  n          - Edit word note"),
+                Line::from("  w          - Toggle Known/Ignored words in sidebar"),
+                Line::from("  r          - Toggle all readings in sidebar"),
+                Line::from("  a          - Toggle autopromotion on/off"),
+                Line::from("  Ctrl+Z     - Undo last autopromotion"),
+                Line::from("  Esc        - Deselect word / back"),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Library:",
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
-                Line::from("  ↑/↓         — Navigate texts"),
-                Line::from("  Enter       — Open text in Reader"),
-                Line::from("  d           — Delete selected text"),
-                Line::from("  i           — Import (clipboard/URL/file/syosetu)"),
-                Line::from("  /           — Search texts by title"),
-                Line::from("  s           — Cycle sort mode"),
-                Line::from("  f           — Cycle source filter"),
+                Line::from("  Up/Down    - Navigate texts"),
+                Line::from("  Enter      - Open text in Reader"),
+                Line::from("  d          - Delete selected text"),
+                Line::from("  i          - Import (clipboard/URL/file)"),
+                Line::from("  /          - Search texts by title"),
+                Line::from("  s          - Cycle sort mode"),
+                Line::from("  f          - Cycle source filter"),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Press Esc or ? to close",
@@ -182,7 +186,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
         PopupState::NoteEditor { text, .. } => {
             let area = centered_rect(50, 30, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let lines = vec![
                 Line::from(Span::styled(
@@ -209,7 +213,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
         PopupState::QuitConfirm => {
             let area = centered_rect(40, 15, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let lines = vec![
                 Line::from(""),
@@ -233,7 +237,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
         PopupState::DeleteConfirm { title, .. } => {
             let area = centered_rect(50, 20, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let lines = vec![
                 Line::from(""),
@@ -264,7 +268,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
         PopupState::DeleteSourceConfirm { title, .. } => {
             let area = centered_rect(55, 25, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let lines = vec![
                 Line::from(""),
@@ -296,7 +300,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
         PopupState::ImportMenu => {
             let area = centered_rect(45, 30, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let lines = vec![
                 Line::from(""),
@@ -327,7 +331,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
         PopupState::UrlInput { text } => {
             let area = centered_rect(60, 20, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let lines = vec![
                 Line::from(""),
@@ -358,7 +362,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
         PopupState::FilePathInput { text } => {
             let area = centered_rect(60, 20, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let lines = vec![
                 Line::from(""),
@@ -389,7 +393,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
         PopupState::SyosetuInput { text } => {
             let area = centered_rect(60, 20, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let lines = vec![
                 Line::from(""),
@@ -420,7 +424,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
         PopupState::SearchInput { text } => {
             let area = centered_rect(50, 15, frame.size());
-            frame.render_widget(Clear, area);
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
 
             let lines = vec![
                 Line::from(""),
@@ -449,6 +453,16 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             frame.render_widget(paragraph, area);
         }
     }
+}
+
+/// Expand a rect by 1 cell on each side to clear wide CJK characters that straddle the border.
+/// Clamped so it never exceeds the terminal bounds.
+fn padded_rect(area: Rect, screen: Rect) -> Rect {
+    let x = area.x.saturating_sub(1).max(screen.x);
+    let y = area.y.saturating_sub(1).max(screen.y);
+    let right = (area.x + area.width + 1).min(screen.x + screen.width);
+    let bottom = (area.y + area.height + 1).min(screen.y + screen.height);
+    Rect::new(x, y, right - x, bottom - y)
 }
 
 /// Create a centered rect with percentage of the total area.

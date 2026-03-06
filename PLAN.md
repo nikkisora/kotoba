@@ -347,6 +347,10 @@ Each card can be reviewed in one of these modes (configured per session or per c
   - `sentences: Vec<SentenceData>` — flattened list: each holds `paragraph_idx`, `token_range`, `text`
   - `vocabulary_cache: HashMap<(String, String), Vocabulary>` — in-memory cache of vocabulary statuses keyed by (base_form, reading)
   - `scroll_offset: usize` — vertical scroll position for main text area
+  - `autopromote_enabled: bool` — per-session toggle, default `true`
+  - `autopromote_history: Vec<AutopromotionBatch>` — undo stack of autopromoted word batches
+  - `show_all_readings: bool` — per-session toggle to show readings for all words in sidebar, default `false`
+  - `show_known_in_sidebar: bool` — per-session toggle to show Known/Ignored words in sidebar word list, default `false`
 - [x] `SentenceData` struct: `paragraph_idx`, `start_token`, `end_token`, `tokens: Vec<TokenDisplay>`
 - [x] `TokenDisplay` struct: `surface`, `base_form`, `reading`, `pos`, `vocabulary_status`, `is_selected`, `dict_entry: Option<ShortGloss>`
 - [x] Load text on enter: query all paragraphs + tokens, build sentence list, lookup all vocabulary statuses, lookup JMdict short glosses for each unique base_form
@@ -377,12 +381,13 @@ Each card can be reviewed in one of these modes (configured per session or per c
 
 #### 2.5 Sidebar Panel
 - [x] Implement `ui/components/sidebar.rs`:
-  - **Header**: Current sentence repeated as plain text (no furigana, just the raw sentence)
-  - **Word list**: Each non-trivial token in the sentence displayed as:
+  - **Header**: Current sentence rendered with furigana (using `furigana::render_sentence`) and vocabulary status coloring, occupying up to half the sidebar height
+  - **Word list**: By default shows only New and Learning words. Known/Ignored words are hidden unless toggled with `w` (or the word is currently selected). Each non-trivial token displayed as:
     ```
     食べ (たべ) = to eat     [2]
     ```
     Format: `surface (reading) = short_gloss  [status]`
+  - Known/Ignored words shown dimmed (DarkGray) when revealed via toggle
   - Currently selected word highlighted with `>>` marker and bold style
   - Scroll independently if word list exceeds sidebar height
 - [x] Word detail popup (triggered by `Enter`):
@@ -408,13 +413,46 @@ Each card can be reviewed in one of these modes (configured per session or per c
   - `i` — set selected word to Ignored
   - `n` — open note editor popup (simple text input, saves to `vocabulary.notes`)
   - `l` — trigger LLM analysis of current sentence (show loading spinner in sidebar, display result when ready)
+  - `w` — toggle showing Known/Ignored words in sidebar word list
+  - `r` — toggle sidebar readings for all words (see §2.7b)
+  - `a` — toggle autopromotion on/off for the current session (see §2.7a)
+  - `Ctrl+Z` — undo last autopromotion batch (see §2.7a)
   - `Esc` — deselect word (set `word_index` to None)
 
-#### 2.7 Verification
+#### 2.7a Autopromotion of New Words
+
+When a user first starts using the app, every word is New — including common words they already know. Manually marking hundreds of words as Known is tedious and discouraging. To solve this, the Reader **automatically promotes all New words to Known** when the user advances past a sentence. The assumption: if you didn't mark a word as Learning, you already know it.
+
+- [ ] **Default behavior**: On sentence advance (↓/j, or →/l wrapping to next sentence), all non-trivial tokens in the **departing** sentence with `vocabulary_status == New (0)` are batch-updated to `Known (5)` in the DB and in-memory cache. No SRS cards are created (Known words don't get cards).
+- [ ] **Per-session toggle**: `a` key in Reader toggles autopromotion on/off for the current session. Status shown in the bottom bar (e.g. `[A]` when active, absent when off). Default: **on**. The toggle state is *not* persisted — each session starts with autopromotion on.
+- [ ] **Undo stack**: `Ctrl+Z` in Reader undoes the most recent autopromotion batch (reverts those words from Known back to New in DB + cache + token display). The stack holds all autopromotion batches from the current session. Only autopromotion actions are undoable via this key — manual status changes (1-5, i) are not on this stack.
+  - `AutopromotionBatch` struct: `sentence_index: usize`, `words: Vec<(String, String, i64)>` (base_form, reading, vocabulary_id) — the set of words that were promoted.
+  - Stack lives on `ReaderState`: `autopromote_history: Vec<AutopromotionBatch>`
+  - On undo: pop last batch, set each word back to `New` in DB, update `vocabulary_cache`, patch all matching tokens across all sentences, show message `"Undo: N words reverted to New"`
+- [ ] **Interaction with manual status**: Words the user has explicitly set to Learning (1-4), Known (5), or Ignored (-1) in the current sentence are **not** touched by autopromotion — only `New (0)` words are promoted. If the user sets a word to Learning and then advances, that word stays at its Learning status.
+- [ ] **Undo does not affect manual changes**: If the user manually set word X to Known (5) and autopromotion also ran on the same sentence, undoing that batch only reverts words that were *autopromoted*, not manually changed ones. The `AutopromotionBatch` only records words that autopromotion actually changed.
+- [ ] **Cross-sentence word appearance**: If word X is autopromoted in sentence 5, its status updates globally (all occurrences across all sentences reflect Known). If the user later undoes sentence 5's batch, word X reverts to New globally — and may be autopromoted again when the user advances past another sentence containing it.
+
+#### 2.7b Sidebar Readings Toggle
+
+By default, the sidebar hides readings for Known (5) and Ignored (-1) words, matching the vocabulary status table in Domain Concepts. A per-session toggle overrides this to show readings for **all** words.
+
+- [x] **Toggle**: `r` key in Reader toggles `show_all_readings` on/off. Default: **off** (readings hidden for Known/Ignored).
+- [x] **Status bar indicator**: `[R]` (green) when active, `[r]` (gray) when off.
+- [x] **Scope**: Only affects the sidebar word list. Furigana rendering in the main text area is unaffected.
+- [x] **Per-session**: Not persisted — resets to off on each Reader load.
+- [x] **ReaderState field**: `show_all_readings: bool`
+
+#### 2.8 Verification
 - [x] Manual test: import a sample text, open in Reader, verify furigana alignment for various token widths
 - [x] Test: sentence navigation wraps correctly at text boundaries
 - [x] Test: status changes persist across Reader reloads (close and reopen same text)
 - [x] Visual check: all vocabulary status colors render correctly on both dark and light terminal backgrounds
+- [ ] Test: advancing a sentence autopromotes New words to Known, sidebar/colors update
+- [ ] Test: toggling autopromotion off with `a` prevents promotion on advance
+- [ ] Test: Ctrl+Z reverts the last autopromotion batch, words return to New
+- [ ] Test: manual status changes (1-4, i) are not affected by undo
+- [ ] Test: words set to Learning before advancing are not autopromoted
 
 ---
 

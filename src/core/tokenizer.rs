@@ -56,7 +56,10 @@ fn is_ascii_only(s: &str) -> bool {
 }
 
 /// Initialize a lindera tokenizer with the bundled UniDic dictionary.
-fn create_tokenizer() -> Result<lindera::tokenizer::Tokenizer> {
+/// Creating a tokenizer is expensive (loads dictionary data), so callers
+/// processing multiple sentences should create one via `create_tokenizer()`
+/// and reuse it with `tokenize_with()`.
+pub fn create_tokenizer() -> Result<lindera::tokenizer::Tokenizer> {
     let dictionary = lindera::dictionary::load_dictionary("embedded://unidic")
         .map_err(|e| anyhow::anyhow!("Failed to load UniDic dictionary: {}", e))?;
     let segmenter =
@@ -65,8 +68,19 @@ fn create_tokenizer() -> Result<lindera::tokenizer::Tokenizer> {
 }
 
 /// Tokenize a sentence into morphological tokens.
+/// Creates a new tokenizer each call — for batch processing, use
+/// `create_tokenizer()` + `tokenize_with()` instead.
 pub fn tokenize_sentence(text: &str) -> Result<Vec<TokenInfo>> {
     let tokenizer = create_tokenizer()?;
+    tokenize_with(&tokenizer, text)
+}
+
+/// Tokenize a sentence using an existing tokenizer instance.
+/// This avoids the cost of re-loading the dictionary for every sentence.
+pub fn tokenize_with(
+    tokenizer: &lindera::tokenizer::Tokenizer,
+    text: &str,
+) -> Result<Vec<TokenInfo>> {
     let mut tokens = tokenizer
         .tokenize(text)
         .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;

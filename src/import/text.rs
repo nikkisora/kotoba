@@ -97,6 +97,7 @@ fn import_text_inner(
     progress: Option<&ProgressBar>,
 ) -> Result<i64> {
     let text_id = models::insert_text(conn, title, content, source_type, source_url)?;
+    let tok = tokenizer::create_tokenizer()?;
 
     let paragraphs = tokenizer::split_paragraphs(content);
     let mut total_tokens = 0usize;
@@ -117,7 +118,7 @@ fn import_text_inner(
         let mut token_position = 0i32;
 
         for (sent_idx, sentence) in sentences.iter().enumerate() {
-            let tokens = tokenizer::tokenize_sentence(sentence)?;
+            let tokens = tokenizer::tokenize_with(&tok, sentence)?;
 
             for token_info in &tokens {
                 models::insert_token(
@@ -154,7 +155,7 @@ fn import_text_inner(
                         && token_info.surface.trim().chars().all(|c| c.is_ascii());
                     let auto_ignore = matches!(
                         token_info.pos.as_str(),
-                        "Particle" | "Auxiliary" | "Conjunction" | "Prefix" | "Suffix"
+                        "Particle" | "Auxiliary" | "Conjunction" | "Prefix"
                     ) || is_numeric
                         || is_ascii;
                     if auto_ignore {
@@ -231,6 +232,7 @@ pub fn pretokenize_text_with_progress(
     content: &str,
     on_progress: &dyn Fn(usize, usize),
 ) -> Result<Vec<PreTokenizedParagraph>> {
+    let tok = tokenizer::create_tokenizer()?;
     let paragraphs = tokenizer::split_paragraphs(content);
     let total = paragraphs.len();
     let mut result = Vec::with_capacity(total);
@@ -240,7 +242,7 @@ pub fn pretokenize_text_with_progress(
         let mut sentences = Vec::with_capacity(sentences_text.len());
 
         for (sent_idx, sentence) in sentences_text.iter().enumerate() {
-            let tokens = tokenizer::tokenize_sentence(sentence)?;
+            let tokens = tokenizer::tokenize_with(&tok, sentence)?;
             sentences.push(PreTokenizedSentence {
                 sentence_index: sent_idx as i32,
                 tokens,
@@ -310,7 +312,7 @@ pub fn write_pretokenized(
                             && token_info.surface.trim().chars().all(|c| c.is_ascii());
                         let auto_ignore = matches!(
                             token_info.pos.as_str(),
-                            "Particle" | "Auxiliary" | "Conjunction" | "Prefix" | "Suffix"
+                            "Particle" | "Auxiliary" | "Conjunction" | "Prefix"
                         ) || is_numeric
                             || is_ascii;
                         if auto_ignore {

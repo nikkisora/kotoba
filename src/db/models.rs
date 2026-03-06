@@ -478,7 +478,7 @@ pub fn get_text_stats(conn: &Connection, text_id: i64) -> Result<TextStats> {
     let total_tokens: usize = conn.query_row(
         "SELECT COUNT(*) FROM tokens t
          JOIN paragraphs p ON t.paragraph_id = p.id
-         WHERE p.text_id = ?1 AND t.pos NOT IN ('Symbol','Punctuation','Whitespace','BOS/EOS','','Particle','Auxiliary','Conjunction','Prefix','Suffix')",
+         WHERE p.text_id = ?1 AND t.pos NOT IN ('Symbol','Punctuation','Whitespace','BOS/EOS','','Particle','Auxiliary','Conjunction','Prefix')",
         params![text_id],
         |r| r.get(0),
     ).unwrap_or(0);
@@ -559,7 +559,10 @@ pub fn insert_web_source_chapter(
 ) -> Result<i64> {
     conn.execute(
         "INSERT INTO web_source_chapters (web_source_id, chapter_number, title, text_id, word_count, chapter_group)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(web_source_id, chapter_number) DO UPDATE SET
+           title = excluded.title,
+           chapter_group = excluded.chapter_group",
         params![web_source_id, chapter_number, title, text_id, word_count, chapter_group],
     )?;
     Ok(conn.last_insert_rowid())

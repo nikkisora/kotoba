@@ -208,6 +208,51 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
         ALTER TABLE web_source_chapters ADD COLUMN chapter_group TEXT NOT NULL DEFAULT '';
     "#,
     ),
+    (
+        13,
+        "Fix syosetu chapter titles to include novel name",
+        r#"
+        UPDATE texts SET title = ws.title || ' — ' || wsc.title
+        FROM web_source_chapters wsc
+        JOIN web_sources ws ON wsc.web_source_id = ws.id
+        WHERE texts.id = wsc.text_id
+          AND ws.source_type = 'syosetu'
+          AND wsc.title != ''
+          AND texts.source_type = 'syosetu';
+    "#,
+    ),
+    (
+        14,
+        "Deduplicate web_source_chapters and add unique constraint",
+        r#"
+        -- Delete duplicate chapter rows, keeping the one with the lowest id
+        -- (which preserves text_id and is_skipped from the original insert)
+        DELETE FROM web_source_chapters
+        WHERE id NOT IN (
+            SELECT MIN(id) FROM web_source_chapters
+            GROUP BY web_source_id, chapter_number
+        );
+
+        -- Add unique constraint to prevent future duplicates
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_wsc_unique_chapter
+            ON web_source_chapters(web_source_id, chapter_number);
+        "#,
+    ),
+    (
+        15,
+        "Reset Suffix vocabulary from Ignored to New",
+        r#"
+        -- Suffixes were previously auto-ignored during import but carry real meaning
+        -- (e.g. 族, 的, 者, 性). Reset them so they appear as normal vocabulary.
+        UPDATE vocabulary SET status = 0, updated_at = datetime('now')
+        WHERE status = -1
+          AND id IN (
+            SELECT DISTINCT v.id FROM vocabulary v
+            JOIN tokens t ON t.base_form = v.base_form AND t.reading = v.reading
+            WHERE t.pos = 'Suffix'
+          );
+        "#,
+    ),
 ];
 
 /// Run all pending migrations.
@@ -258,6 +303,6 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 12);
+        assert_eq!(version, 15);
     }
 }
