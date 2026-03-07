@@ -38,7 +38,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         Span::raw(" — Chapters"),
         Span::raw("  "),
         Span::styled(
-            format!("page {}/{}", state.page + 1, state.total_pages()),
+            format!(
+                "page ~{}/{}",
+                state.current_page_display(),
+                state.total_pages()
+            ),
             Style::default().fg(Color::Yellow),
         ),
         Span::raw("  "),
@@ -112,7 +116,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     // Chapter list (paginated)
     let visible = state.visible_chapters();
-    let page_offset = state.page * state.page_size;
+    let page_offset = state.page_start;
 
     // Build list items, inserting group headers when the group name changes
     let mut items: Vec<ListItem> = Vec::new();
@@ -214,17 +218,17 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     let list_title = if state.loading {
         format!(
-            " Chapters ({}) — Page {}/{} {} Loading more... ",
+            " Chapters ({}) — Page ~{}/{} {} Loading more... ",
             state.total_chapters,
-            state.page + 1,
+            state.current_page_display(),
             state.total_pages(),
             app.spinner_char(),
         )
     } else {
         format!(
-            " Chapters ({}) — Page {}/{} ",
+            " Chapters ({}) — Page ~{}/{} ",
             state.total_chapters,
-            state.page + 1,
+            state.current_page_display(),
             state.total_pages()
         )
     };

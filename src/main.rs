@@ -725,35 +725,91 @@ fn handle_library_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Adjust page_start so that `state.selected` is within the visible range.
+fn ensure_selected_visible(state: &mut app::ChapterSelectState) {
+    // If selected is before the current page, scroll up
+    if state.selected < state.page_start {
+        state.page_start = state.selected;
+        return;
+    }
+    // If selected is beyond the visible chapters, scroll forward
+    let vis = state.visible_chapters();
+    let page_end = state.page_start + vis.len();
+    if state.selected >= page_end {
+        // Scroll so selected is the last visible item — walk backwards from selected
+        // to find a good page_start
+        let target = state.selected;
+        // Start from the selected item and walk backwards, counting rows
+        let mut rows_left = state.page_size;
+        let mut candidate_start = target;
+
+        // Walk backwards from target to find how many chapters fit
+        for idx in (0..=target).rev() {
+            let ch = &state.chapters[idx];
+            let mut rows_needed = 1; // the chapter itself
+
+            // Check if this chapter is the first in its group (looking at the chapter before it)
+            if !ch.chapter_group.is_empty() {
+                let is_first_in_group = if idx == 0 {
+                    true
+                } else {
+                    state.chapters[idx - 1].chapter_group != ch.chapter_group
+                };
+                if is_first_in_group {
+                    rows_needed += 1; // group header
+                }
+            }
+
+            if rows_needed > rows_left {
+                break;
+            }
+            rows_left -= rows_needed;
+            candidate_start = idx;
+        }
+        state.page_start = candidate_start;
+    }
+}
+
 fn handle_chapter_select_key(app: &mut App, key: KeyEvent, source_id: i64) {
+    // Recalculate page_size on every key event to handle terminal resize
+    if let Some(ref mut state) = app.chapter_select_state {
+        let new_page_size = app::chapter_page_size_for_terminal();
+        if state.page_size != new_page_size {
+            state.page_size = new_page_size;
+            // Ensure selected is still visible after resize
+            ensure_selected_visible(state);
+        }
+    }
+
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut state) = app.chapter_select_state {
                 state.selected = state.selected.saturating_sub(1);
-                // Auto-adjust page
-                state.page = state.selected / state.page_size;
+                ensure_selected_visible(state);
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(ref mut state) = app.chapter_select_state {
                 let max = state.chapters.len().saturating_sub(1);
                 state.selected = (state.selected + 1).min(max);
-                state.page = state.selected / state.page_size;
+                ensure_selected_visible(state);
             }
         }
         KeyCode::Char('n') | KeyCode::PageDown => {
             if let Some(ref mut state) = app.chapter_select_state {
-                if state.page + 1 < state.total_pages() {
-                    state.page += 1;
-                    state.selected = state.page * state.page_size;
+                let next_start = state.next_page_start();
+                if next_start < state.chapters.len() {
+                    state.page_start = next_start;
+                    state.selected = next_start;
                 }
             }
         }
         KeyCode::Char('p') | KeyCode::PageUp => {
             if let Some(ref mut state) = app.chapter_select_state {
-                if state.page > 0 {
-                    state.page -= 1;
-                    state.selected = state.page * state.page_size;
+                if state.page_start > 0 {
+                    // Go back by approximately page_size chapters
+                    state.page_start = state.page_start.saturating_sub(state.page_size);
+                    state.selected = state.page_start;
                 }
             }
         }
@@ -920,10 +976,18 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                     app.set_message(format!("Autopromote error: {}", e));
                 }
                 if is_at_end {
-                    app.set_message("End of text. Press Esc to return.");
+                    let _ = app.save_reading_progress();
+                    match app.advance_to_next_chapter() {
+                        Ok(true) => {}
+                        _ => {
+                            app.set_message("End of text. Press Esc to return.");
+                        }
+                    }
                 }
             }
-            let _ = app.save_reading_progress();
+            if !matches!(departing, Some((_, true))) {
+                let _ = app.save_reading_progress();
+            }
         }
 
         // Word navigation
@@ -1008,8 +1072,14 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                     app.set_message(format!("Autopromote error: {}", e));
                 }
                 if is_at_end {
-                    app.set_message("End of text. Press Esc to return.");
                     let _ = app.save_reading_progress();
+                    // Try to advance to next chapter automatically
+                    match app.advance_to_next_chapter() {
+                        Ok(true) => {} // navigated to next chapter, message already set
+                        _ => {
+                            app.set_message("End of text. Press Esc to return.");
+                        }
+                    }
                 }
             }
         }

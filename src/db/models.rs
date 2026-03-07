@@ -740,6 +740,43 @@ pub fn get_reading_progress(conn: &Connection, text_id: i64) -> Result<usize> {
     Ok(idx as usize)
 }
 
+/// Find the chapter that owns a given text_id, along with the next non-skipped chapter.
+/// Returns (current_chapter, next_chapter, source_id).
+pub fn find_next_chapter_for_text(
+    conn: &Connection,
+    text_id: i64,
+) -> Result<Option<(WebSourceChapter, Option<WebSourceChapter>, i64)>> {
+    // Find the chapter that references this text
+    let current: Option<WebSourceChapter> = conn
+        .query_row(
+            "SELECT * FROM web_source_chapters WHERE text_id = ?1",
+            params![text_id],
+            WebSourceChapter::from_row,
+        )
+        .ok();
+
+    let current = match current {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+
+    let source_id = current.web_source_id;
+    let current_number = current.chapter_number;
+
+    // Find the next non-skipped chapter by chapter_number
+    let next: Option<WebSourceChapter> = conn
+        .query_row(
+            "SELECT * FROM web_source_chapters
+             WHERE web_source_id = ?1 AND chapter_number > ?2 AND is_skipped = 0
+             ORDER BY chapter_number ASC LIMIT 1",
+            params![source_id, current_number],
+            WebSourceChapter::from_row,
+        )
+        .ok();
+
+    Ok(Some((current, next, source_id)))
+}
+
 /// List texts that don't belong to any web_source (standalone texts).
 pub fn list_standalone_texts(conn: &Connection) -> Result<Vec<Text>> {
     // Texts whose id is NOT referenced by any web_source_chapters.text_id

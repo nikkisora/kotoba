@@ -7,6 +7,16 @@ use crate::config::AppConfig;
 use crate::core::dictionary::{self, DictEntry};
 use crate::db::models::{self, TextStats, Vocabulary, VocabularyStatus};
 
+/// Compute a reasonable page_size for chapter select based on terminal height.
+/// Layout: 1 title bar + 4 source info + 2 list borders + 1 status bar = 8 fixed rows.
+pub fn chapter_page_size_for_terminal() -> usize {
+    let height = crossterm::terminal::size()
+        .map(|(_, h)| h as usize)
+        .unwrap_or(40);
+    // Available rows for chapter items = total - fixed overhead
+    height.saturating_sub(8).max(5)
+}
+
 /// Which screen is currently active.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Screen {
@@ -211,7 +221,9 @@ pub struct ChapterSelectState {
     pub source: models::WebSource,
     pub chapters: Vec<models::WebSourceChapter>,
     pub selected: usize,
-    pub page: usize,
+    /// Index of the first chapter visible on the current page.
+    pub page_start: usize,
+    /// Available rows for the chapter list (terminal height minus chrome).
     pub page_size: usize,
     pub total_chapters: usize,
     pub total_imported: usize,
@@ -223,28 +235,79 @@ pub struct ChapterSelectState {
 }
 
 impl ChapterSelectState {
-    /// Get the chapters visible on the current page.
+    /// Get the chapters visible on the current page, accounting for group
+    /// headers that consume extra rows.
     pub fn visible_chapters(&self) -> &[models::WebSourceChapter] {
-        let start = self.page * self.page_size;
-        let end = (start + self.page_size).min(self.chapters.len());
-        if start < self.chapters.len() {
-            &self.chapters[start..end]
+        let start = self.page_start;
+        if start >= self.chapters.len() {
+            return &[];
+        }
+
+        let mut rows_left = self.page_size;
+        let mut last_group: Option<&str> = None;
+        let mut end = start;
+
+        for ch in &self.chapters[start..] {
+            // Check if this chapter triggers a new group header
+            if !ch.chapter_group.is_empty() {
+                let new_group = match last_group {
+                    Some(prev) => prev != ch.chapter_group.as_str(),
+                    None => true,
+                };
+                if new_group {
+                    if rows_left == 0 {
+                        break;
+                    }
+                    rows_left -= 1; // group header takes a row
+                }
+                last_group = Some(&ch.chapter_group);
+            } else if last_group.is_some() {
+                last_group = None;
+            }
+
+            if rows_left == 0 {
+                break;
+            }
+            rows_left -= 1; // chapter itself takes a row
+            end += 1;
+        }
+
+        &self.chapters[start..end]
+    }
+
+    /// Compute the start index of the next page (after current visible chapters).
+    pub fn next_page_start(&self) -> usize {
+        let vis = self.visible_chapters();
+        if vis.is_empty() {
+            self.chapters.len()
         } else {
-            &[]
+            self.page_start + vis.len()
         }
     }
 
     /// Index within the current page.
     pub fn page_selected(&self) -> usize {
-        self.selected.saturating_sub(self.page * self.page_size)
+        self.selected.saturating_sub(self.page_start)
     }
 
-    /// Total number of pages.
+    /// Approximate total number of pages (for display only).
     pub fn total_pages(&self) -> usize {
         if self.chapters.is_empty() {
             1
         } else {
+            // Approximate: we can't know exact page count without walking all
+            // group headers, but page_size gives a reasonable estimate.
             (self.chapters.len() + self.page_size - 1) / self.page_size
+        }
+    }
+
+    /// Current page number (1-indexed for display), computed from page_start.
+    pub fn current_page_display(&self) -> usize {
+        if self.chapters.is_empty() {
+            1
+        } else {
+            // Approximate page number based on position
+            (self.page_start / self.page_size.max(1)) + 1
         }
     }
 }
@@ -1247,8 +1310,8 @@ impl App {
             source: placeholder_source,
             chapters: vec![],
             selected: 0,
-            page: 0,
-            page_size: 50,
+            page_start: 0,
+            page_size: chapter_page_size_for_terminal(),
             total_chapters: 0,
             total_imported: 0,
             total_skipped: 0,
@@ -1303,13 +1366,15 @@ impl App {
             }
         }
 
+        let page_size = chapter_page_size_for_terminal();
         let selected = self
             .chapter_select_state
             .as_ref()
             .filter(|s| s.source.id == source_id)
             .map(|s| s.selected.min(chapters.len().saturating_sub(1)))
             .unwrap_or(0);
-        let page = selected / 50;
+        // Approximate page_start: snap to a page boundary
+        let page_start = (selected / page_size) * page_size;
 
         let is_syosetu = source.source_type == "syosetu";
         let ncode = source.external_id.clone();
@@ -1319,8 +1384,8 @@ impl App {
             source,
             chapters,
             selected,
-            page,
-            page_size: 50,
+            page_start,
+            page_size,
             total_chapters: total,
             total_imported: imported,
             total_skipped: skipped,
@@ -1354,6 +1419,86 @@ impl App {
             models::save_reading_progress(&conn, state.text_id, state.sentence_index)?;
         }
         Ok(())
+    }
+
+    /// Try to advance to the next chapter in the same source.
+    /// Returns Ok(true) if we navigated to a new chapter, Ok(false) if there is no next chapter.
+    pub fn advance_to_next_chapter(&mut self) -> Result<bool> {
+        let text_id = match self.reader_state {
+            Some(ref s) => s.text_id,
+            None => return Ok(false),
+        };
+
+        let conn = self.open_db()?;
+        let info = models::find_next_chapter_for_text(&conn, text_id)?;
+        drop(conn);
+
+        let (_current, next, source_id) = match info {
+            Some(v) => v,
+            None => return Ok(false), // not a chapter-based text
+        };
+
+        let next_ch = match next {
+            Some(ch) => ch,
+            None => return Ok(false), // no next chapter
+        };
+
+        if let Some(next_text_id) = next_ch.text_id {
+            // Already imported — open it directly
+            self.previous_screen = Some(Screen::ChapterSelect { source_id });
+            self.load_text(next_text_id)?;
+            // Update chapter select selected index to point at the new chapter
+            if let Some(ref mut cs) = self.chapter_select_state {
+                if let Some(idx) = cs.chapters.iter().position(|c| c.id == next_ch.id) {
+                    cs.selected = idx;
+                }
+            }
+            self.set_message(format!(
+                "Chapter {}: {}",
+                next_ch.chapter_number, next_ch.title
+            ));
+            Ok(true)
+        } else {
+            // Not yet imported — queue for background import if syosetu
+            let source_type = self
+                .chapter_select_state
+                .as_ref()
+                .map(|s| s.source.source_type.clone());
+
+            if source_type.as_deref() == Some("syosetu") {
+                self.pending_open_chapter = Some(next_ch.id);
+                if !self.preprocessing_chapters.contains(&next_ch.id) {
+                    if let Some(ref mut importer) = self.background_importer {
+                        if let Some(ref cs) = self.chapter_select_state {
+                            importer.queue_single(
+                                cs.source.id,
+                                &cs.source.source_type,
+                                &cs.source.external_id,
+                                next_ch.id,
+                                next_ch.chapter_number,
+                                &self.db_path,
+                            );
+                        }
+                    }
+                    self.preprocessing_chapters.insert(next_ch.id);
+                }
+                self.set_message(format!(
+                    "Importing chapter {}... will open when ready",
+                    next_ch.chapter_number
+                ));
+                // Go to chapter select to wait
+                self.screen = Screen::ChapterSelect { source_id };
+                if let Some(ref mut cs) = self.chapter_select_state {
+                    if let Some(idx) = cs.chapters.iter().position(|c| c.id == next_ch.id) {
+                        cs.selected = idx;
+                    }
+                }
+                let _ = self.load_chapter_select(source_id);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
     }
 
     /// Go back from reader to the previous screen, saving progress.
