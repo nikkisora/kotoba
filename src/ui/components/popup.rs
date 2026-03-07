@@ -134,24 +134,11 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
             let lines = vec![
                 Line::from(Span::styled(
-                    "Keybindings & Commands",
+                    "Keybindings",
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 )),
-                Line::from(""),
-                // ── CLI Commands ──
-                Line::from(Span::styled("CLI Commands:", heading)),
-                Line::from("  kotoba run                   Launch the TUI"),
-                Line::from("  kotoba setup-dict            Download & set up JMdict"),
-                Line::from("  kotoba import-dict <path>    Import JMdict XML manually"),
-                Line::from("  kotoba import <file>         Import .txt/.srt/.ass/.epub"),
-                Line::from("  kotoba import --clipboard    Import from clipboard"),
-                Line::from("  kotoba import --url <URL>    Import from a web URL"),
-                Line::from("  kotoba syosetu <ncode>       Import Syosetu novel"),
-                Line::from("  kotoba syosetu <ncode> -c N  Import specific chapter"),
-                Line::from("  kotoba dict <word>           Look up a word in JMdict"),
-                Line::from("  kotoba tokenize <text>       Tokenize Japanese text"),
                 Line::from(""),
                 // ── Global ──
                 Line::from(Span::styled("Global:", heading)),
