@@ -296,6 +296,180 @@ pub fn split_sentences(paragraph: &str) -> Vec<String> {
     sentences
 }
 
+// ─── Conjugation Grouping ────────────────────────────────────────────
+
+/// Minimal token info needed for conjugation grouping (avoids circular dep with app.rs).
+pub struct GroupToken<'a> {
+    pub pos: &'a str,
+    pub base_form: &'a str,
+    /// Raw UniDic conjugation form, already translated to English (e.g. "irrealis (general)").
+    pub conjugation_form: &'a str,
+}
+
+/// Result of conjugation group assignment for a single group.
+#[derive(Debug, Clone)]
+pub struct ConjugationGroup {
+    /// Unique group index within the sentence.
+    pub group_id: usize,
+    /// Index of the head token (verb/adjective).
+    pub head_index: usize,
+    /// All token indices in this group (head + auxiliaries).
+    pub member_indices: Vec<usize>,
+    /// Human-readable conjugation description: "verb, negative, past".
+    pub description: String,
+}
+
+/// Scan tokens left-to-right and group verb/adjective heads with following auxiliaries.
+///
+/// Rules:
+/// - Start a new group when a Verb or Adjective token is found
+/// - Continue adding tokens while the next token's POS is "Auxiliary"
+/// - Stop at any non-Auxiliary token
+///
+/// Returns a list of groups. Standalone verbs/adjectives with no auxiliaries
+/// still get a group (single-member) with a base description.
+pub fn assign_conjugation_groups(tokens: &[GroupToken]) -> Vec<ConjugationGroup> {
+    let mut groups = Vec::new();
+    let mut group_id = 0usize;
+    let mut i = 0;
+
+    while i < tokens.len() {
+        let tok = &tokens[i];
+
+        // Only verbs and adjectives can be group heads
+        if tok.pos == "Verb" || tok.pos == "Adjective" {
+            let head_index = i;
+            let mut members = vec![i];
+
+            // Collect following Auxiliary tokens
+            let mut j = i + 1;
+            while j < tokens.len() && tokens[j].pos == "Auxiliary" {
+                members.push(j);
+                j += 1;
+            }
+
+            // Build human-readable description
+            let desc = build_conjugation_description(tokens, &members);
+
+            groups.push(ConjugationGroup {
+                group_id,
+                head_index,
+                member_indices: members,
+                description: desc,
+            });
+
+            group_id += 1;
+            i = j; // skip past the group
+        } else {
+            i += 1;
+        }
+    }
+
+    groups
+}
+
+/// Build a human-readable conjugation description from a group of tokens.
+///
+/// The first token is the head (verb/adjective). Remaining tokens are auxiliaries
+/// whose `base_form` is mapped to English labels. The head's `conjugation_form`
+/// may add additional info (imperative, conditional, volitional).
+fn build_conjugation_description(tokens: &[GroupToken], members: &[usize]) -> String {
+    if members.is_empty() {
+        return String::new();
+    }
+
+    let head = &tokens[members[0]];
+
+    // Start with POS label
+    let pos_label = match head.pos {
+        "Verb" => "verb",
+        "Adjective" => "adjective",
+        _ => "word",
+    };
+
+    let mut parts: Vec<&str> = vec![pos_label];
+
+    // Add labels for each auxiliary based on its base_form
+    for &idx in &members[1..] {
+        let label = auxiliary_label(&tokens[idx].base_form);
+        if !label.is_empty() {
+            parts.push(label);
+        }
+    }
+
+    // Check the conjugation_form of the *last* token in the group for
+    // additional inflection info (conditional, imperative, volitional).
+    let last = &tokens[*members.last().unwrap()];
+    let trailing_label = trailing_form_label(last.conjugation_form);
+    if let Some(lbl) = trailing_label {
+        // Avoid duplicating labels already added by auxiliaries
+        if !parts.contains(&lbl) {
+            parts.push(lbl);
+        }
+    }
+
+    // Also check if head is in imperative form with no auxiliaries
+    if members.len() == 1 {
+        let head_trailing = trailing_form_label(head.conjugation_form);
+        if let Some(lbl) = head_trailing {
+            if !parts.contains(&lbl) {
+                parts.push(lbl);
+            }
+        }
+    }
+
+    parts.join(", ")
+}
+
+/// Map an auxiliary's base_form to a human-readable English label.
+fn auxiliary_label(base_form: &str) -> &'static str {
+    match base_form {
+        "ない" => "negative",
+        "ます" => "polite",
+        "た" | "だ" => "past",
+        "て" | "で" => "te-form",
+        "れる" | "られる" => "passive/potential",
+        "せる" | "させる" => "causative",
+        "たい" => "want to",
+        "う" | "よう" => "volitional",
+        "ぬ" => "negative (classical)",
+        "ず" => "negative (literary)",
+        "まい" => "negative volitional",
+        "そう" => "looks like",
+        "らしい" => "seems like",
+        "べし" => "should (classical)",
+        "です" => "copula (polite)",
+        // "だ" is already covered as "past" above — when it's an auxiliary
+        // after a verb it's typically the past tense marker (食べた=食べ+た,
+        // 読んだ=読ん+だ). The copula だ after na-adj/nouns is a separate case.
+        _ => "",
+    }
+}
+
+/// Check the conjugation_form of the last group member for trailing inflection
+/// info that should be appended to the description.
+/// Handles both raw UniDic forms (Japanese) and translated forms (English).
+fn trailing_form_label(conjugation_form: &str) -> Option<&'static str> {
+    // Translated English forms
+    if conjugation_form.starts_with("conditional") {
+        Some("conditional")
+    } else if conjugation_form.starts_with("imperative") {
+        Some("imperative")
+    } else if conjugation_form.starts_with("volitional") {
+        Some("volitional")
+    }
+    // Raw UniDic Japanese forms
+    else if conjugation_form.starts_with("仮定形") {
+        Some("conditional")
+    } else if conjugation_form.starts_with("命令形") {
+        Some("imperative")
+    } else if conjugation_form.starts_with("意志推量形") {
+        Some("volitional")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,5 +622,289 @@ mod tests {
         assert_eq!(map_pos("形状詞"), "Adjectival_Noun");
         assert_eq!(map_pos("補助記号"), "Symbol");
         assert_eq!(map_pos("unknown"), "Other");
+    }
+
+    // ─── Conjugation Grouping Tests ───
+
+    fn make_group_token<'a>(
+        pos: &'a str,
+        base_form: &'a str,
+        conj_form: &'a str,
+    ) -> GroupToken<'a> {
+        GroupToken {
+            pos,
+            base_form,
+            conjugation_form: conj_form,
+        }
+    }
+
+    #[test]
+    fn test_grouping_verb_negative() {
+        // 食べない → 食べ(Verb) + ない(Auxiliary)
+        let tokens = vec![
+            make_group_token("Verb", "食べる", "continuative (general)"),
+            make_group_token("Auxiliary", "ない", "terminal (general)"),
+        ];
+        let groups = assign_conjugation_groups(&tokens);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].head_index, 0);
+        assert_eq!(groups[0].member_indices, vec![0, 1]);
+        assert_eq!(groups[0].description, "verb, negative");
+    }
+
+    #[test]
+    fn test_grouping_verb_polite_past() {
+        // 食べました → 食べ(Verb) + まし(Aux:ます) + た(Aux)
+        let tokens = vec![
+            make_group_token("Verb", "食べる", "continuative (general)"),
+            make_group_token("Auxiliary", "ます", "continuative (general)"),
+            make_group_token("Auxiliary", "た", "terminal (general)"),
+        ];
+        let groups = assign_conjugation_groups(&tokens);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].member_indices, vec![0, 1, 2]);
+        assert_eq!(groups[0].description, "verb, polite, past");
+    }
+
+    #[test]
+    fn test_grouping_verb_causative_want() {
+        // 食べさせたい → 食べ(Verb) + させ(Aux) + たい(Aux)
+        let tokens = vec![
+            make_group_token("Verb", "食べる", "continuative (general)"),
+            make_group_token("Auxiliary", "させる", "continuative (general)"),
+            make_group_token("Auxiliary", "たい", "terminal (general)"),
+        ];
+        let groups = assign_conjugation_groups(&tokens);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].description, "verb, causative, want to");
+    }
+
+    #[test]
+    fn test_grouping_stops_at_particle() {
+        // 食べて + いる → two separate groups because て is Particle
+        let tokens = vec![
+            make_group_token("Verb", "食べる", "continuative (general)"),
+            make_group_token("Particle", "て", ""),
+            make_group_token("Verb", "いる", "terminal (general)"),
+        ];
+        let groups = assign_conjugation_groups(&tokens);
+        assert_eq!(
+            groups.len(),
+            2,
+            "Should be two groups separated by particle"
+        );
+        assert_eq!(groups[0].member_indices, vec![0]);
+        assert_eq!(groups[1].member_indices, vec![2]);
+    }
+
+    #[test]
+    fn test_grouping_standalone_verb() {
+        // 食べる (dictionary form, no auxiliaries)
+        let tokens = vec![
+            make_group_token("Verb", "食べる", "terminal (general)"),
+            make_group_token("Symbol", "。", ""),
+        ];
+        let groups = assign_conjugation_groups(&tokens);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].member_indices, vec![0]);
+        assert_eq!(groups[0].description, "verb");
+    }
+
+    #[test]
+    fn test_grouping_conditional_form() {
+        // 行かなけれ → 行か(Verb) + なけれ(Aux:ない, conditional form)
+        let tokens = vec![
+            make_group_token("Verb", "行く", "irrealis (general)"),
+            make_group_token("Auxiliary", "ない", "conditional (general)"),
+        ];
+        let groups = assign_conjugation_groups(&tokens);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].description, "verb, negative, conditional");
+    }
+
+    #[test]
+    fn test_grouping_imperative() {
+        // 食べろ — single verb in imperative form
+        let tokens = vec![make_group_token("Verb", "食べる", "imperative (general)")];
+        let groups = assign_conjugation_groups(&tokens);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].description, "verb, imperative");
+    }
+
+    #[test]
+    fn test_grouping_adjective() {
+        // 美しくない → 美しく(Adj) + ない(Aux)
+        let tokens = vec![
+            make_group_token("Adjective", "美しい", "continuative (general)"),
+            make_group_token("Auxiliary", "ない", "terminal (general)"),
+        ];
+        let groups = assign_conjugation_groups(&tokens);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].description, "adjective, negative");
+    }
+
+    #[test]
+    fn test_grouping_multiple_groups() {
+        // 食べない猫が走った → verb-group1, Noun, Particle, verb-group2
+        let tokens = vec![
+            make_group_token("Verb", "食べる", "continuative (general)"),
+            make_group_token("Auxiliary", "ない", "attributive (general)"),
+            make_group_token("Noun", "猫", ""),
+            make_group_token("Particle", "が", ""),
+            make_group_token("Verb", "走る", "continuative (general)"),
+            make_group_token("Auxiliary", "た", "terminal (general)"),
+        ];
+        let groups = assign_conjugation_groups(&tokens);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].member_indices, vec![0, 1]);
+        assert_eq!(groups[0].description, "verb, negative");
+        assert_eq!(groups[1].member_indices, vec![4, 5]);
+        assert_eq!(groups[1].description, "verb, past");
+    }
+
+    #[test]
+    fn test_auxiliary_label_coverage() {
+        assert_eq!(auxiliary_label("ない"), "negative");
+        assert_eq!(auxiliary_label("ます"), "polite");
+        assert_eq!(auxiliary_label("た"), "past");
+        assert_eq!(auxiliary_label("だ"), "past");
+        assert_eq!(auxiliary_label("れる"), "passive/potential");
+        assert_eq!(auxiliary_label("られる"), "passive/potential");
+        assert_eq!(auxiliary_label("せる"), "causative");
+        assert_eq!(auxiliary_label("させる"), "causative");
+        assert_eq!(auxiliary_label("たい"), "want to");
+        assert_eq!(auxiliary_label("う"), "volitional");
+        assert_eq!(auxiliary_label("よう"), "volitional");
+        assert_eq!(auxiliary_label("ぬ"), "negative (classical)");
+        assert_eq!(auxiliary_label("ず"), "negative (literary)");
+        assert_eq!(auxiliary_label("まい"), "negative volitional");
+        assert_eq!(auxiliary_label("そう"), "looks like");
+        assert_eq!(auxiliary_label("らしい"), "seems like");
+        assert_eq!(auxiliary_label("べし"), "should (classical)");
+        assert_eq!(auxiliary_label("です"), "copula (polite)");
+        assert_eq!(auxiliary_label("unknown"), "");
+    }
+
+    /// Helper: tokenize text and run grouping, returning groups with their descriptions
+    fn tokenize_and_group(text: &str) -> (Vec<TokenInfo>, Vec<ConjugationGroup>) {
+        let tokens = tokenize_sentence(text).unwrap();
+        let group_tokens: Vec<GroupToken> = tokens
+            .iter()
+            .map(|t| GroupToken {
+                pos: &t.pos,
+                base_form: &t.base_form,
+                conjugation_form: &t.conjugation_form,
+            })
+            .collect();
+        let groups = assign_conjugation_groups(&group_tokens);
+        (tokens, groups)
+    }
+
+    #[test]
+    fn test_grouping_real_tabenai() {
+        // 食べない → verb, negative
+        let (tokens, groups) = tokenize_and_group("食べない");
+        assert!(
+            !groups.is_empty(),
+            "食べない should have at least one group"
+        );
+        assert!(
+            groups[0].member_indices.len() >= 2,
+            "食べない should group verb + auxiliary, tokens: {:?}",
+            tokens
+                .iter()
+                .map(|t| (&t.surface, &t.pos))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            groups[0].description.contains("negative"),
+            "Expected 'negative' in description, got: {}",
+            groups[0].description
+        );
+    }
+
+    #[test]
+    fn test_grouping_real_tabemasu() {
+        // 食べます → verb, polite
+        let (_tokens, groups) = tokenize_and_group("食べます");
+        assert!(!groups.is_empty());
+        assert!(
+            groups[0].description.contains("polite"),
+            "Expected 'polite' in description, got: {}",
+            groups[0].description
+        );
+    }
+
+    #[test]
+    fn test_grouping_real_taberareru() {
+        // 食べられる → verb, passive/potential
+        let (_tokens, groups) = tokenize_and_group("食べられる");
+        assert!(!groups.is_empty());
+        assert!(
+            groups[0].description.contains("passive/potential"),
+            "Expected 'passive/potential' in description, got: {}",
+            groups[0].description
+        );
+    }
+
+    #[test]
+    fn test_grouping_real_tabeyou() {
+        // 食べよう → verb, volitional
+        let (_tokens, groups) = tokenize_and_group("食べよう");
+        assert!(!groups.is_empty());
+        assert!(
+            groups[0].description.contains("volitional"),
+            "Expected 'volitional' in description, got: {}",
+            groups[0].description
+        );
+    }
+
+    #[test]
+    fn test_grouping_real_taberu() {
+        // 食べる → standalone verb (dictionary form)
+        let (_tokens, groups) = tokenize_and_group("食べる");
+        assert!(!groups.is_empty());
+        assert_eq!(
+            groups[0].description, "verb",
+            "食べる (dictionary form) should just be 'verb'"
+        );
+    }
+
+    #[test]
+    fn test_grouping_sample_sentence() {
+        // From sample_hard.txt: 食べない。食べます。食べる。食べられる。食べよう。
+        let full = "食べない。食べます。食べる。食べられる。食べよう。";
+        let (tokens, groups) = tokenize_and_group(full);
+
+        // Print debug info
+        let token_info: Vec<_> = tokens
+            .iter()
+            .map(|t| format!("{}({}:{})", t.surface, t.pos, t.base_form))
+            .collect();
+
+        assert!(
+            groups.len() >= 5,
+            "Expected at least 5 verb groups, got {} from tokens: {:?}",
+            groups.len(),
+            token_info
+        );
+
+        // Check that we found negative, polite, passive/potential, and volitional
+        let descriptions: Vec<&str> = groups.iter().map(|g| g.description.as_str()).collect();
+        assert!(
+            descriptions.iter().any(|d| d.contains("negative")),
+            "Should find 'negative' among: {:?}",
+            descriptions
+        );
+        assert!(
+            descriptions.iter().any(|d| d.contains("polite")),
+            "Should find 'polite' among: {:?}",
+            descriptions
+        );
+        assert!(
+            descriptions.iter().any(|d| d.contains("passive/potential")),
+            "Should find 'passive/potential' among: {:?}",
+            descriptions
+        );
     }
 }

@@ -253,6 +253,23 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
           );
         "#,
     ),
+    (
+        16,
+        "Create user_expressions table for manual MWE entries",
+        r#"
+        CREATE TABLE IF NOT EXISTS user_expressions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            surface TEXT NOT NULL,
+            reading TEXT NOT NULL DEFAULT '',
+            gloss TEXT NOT NULL DEFAULT '',
+            status INTEGER NOT NULL DEFAULT 0,
+            notes TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_user_expr_surface ON user_expressions(surface);
+        "#,
+    ),
 ];
 
 /// Run all pending migrations.
@@ -303,6 +320,6 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 15);
+        assert_eq!(version, 16);
     }
 }

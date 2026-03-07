@@ -210,6 +210,35 @@ pub struct LlmCacheEntry {
     pub created_at: String,
 }
 
+/// A user-created multi-word expression.
+#[derive(Debug, Clone)]
+pub struct UserExpression {
+    pub id: i64,
+    pub surface: String,
+    pub reading: String,
+    pub gloss: String,
+    pub status: VocabularyStatus,
+    pub notes: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl UserExpression {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        let status_val: i32 = row.get("status")?;
+        Ok(Self {
+            id: row.get("id")?,
+            surface: row.get("surface")?,
+            reading: row.get("reading")?,
+            gloss: row.get("gloss")?,
+            status: VocabularyStatus::from_i32(status_val),
+            notes: row.get("notes")?,
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+        })
+    }
+}
+
 // ─── CRUD Operations ─────────────────────────────────────────────────
 
 /// Insert a new text and return its id.
@@ -787,6 +816,45 @@ pub fn list_standalone_texts(conn: &Connection) -> Result<Vec<Text>> {
     )?;
     let rows = stmt.query_map([], Text::from_row)?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+// ─── User Expression CRUD ────────────────────────────────────────────
+
+/// Insert or update a user expression. Returns the expression id.
+pub fn upsert_user_expression(
+    conn: &Connection,
+    surface: &str,
+    reading: &str,
+    gloss: &str,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO user_expressions (surface, reading, gloss)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(surface) DO UPDATE SET
+             reading = excluded.reading,
+             gloss = excluded.gloss,
+             updated_at = datetime('now')",
+        params![surface, reading, gloss],
+    )?;
+    let id = conn.query_row(
+        "SELECT id FROM user_expressions WHERE surface = ?1",
+        params![surface],
+        |row| row.get(0),
+    )?;
+    Ok(id)
+}
+
+/// List all user expressions (for MWE detection cache).
+pub fn list_user_expressions(conn: &Connection) -> Result<Vec<UserExpression>> {
+    let mut stmt = conn.prepare("SELECT * FROM user_expressions ORDER BY length(surface) DESC")?;
+    let rows = stmt.query_map([], UserExpression::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Delete a user expression by id.
+pub fn delete_user_expression(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM user_expressions WHERE id = ?1", params![id])?;
+    Ok(())
 }
 
 #[cfg(test)]

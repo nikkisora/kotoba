@@ -89,9 +89,15 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
             .add_modifier(Modifier::BOLD),
     )));
 
-    // Word list — by default hide Known and Ignored unless toggled
+    // Word list — by default hide Known and Ignored unless toggled.
+    // Skip non-head group members (they are merged with their head token).
     for (i, token) in sentence.tokens.iter().enumerate() {
         if token.is_trivial {
+            continue;
+        }
+
+        // Skip non-head group members (auxiliaries in conjugation groups)
+        if token.group_id.is_some() && !token.is_group_head {
             continue;
         }
 
@@ -118,12 +124,41 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
             VocabularyStatus::Known => "K",
         };
 
-        // Show surface reading (conjugated form) if available, else lemma reading.
-        // By default, hide readings for Known/Ignored words; show_all_readings overrides this.
-        let display_reading = if !token.surface_reading.is_empty() {
-            &token.surface_reading
+        // For group heads, show the combined surface of the whole group
+        let display_surface = if let Some(gid) = token.group_id {
+            sentence
+                .tokens
+                .iter()
+                .filter(|t| t.group_id == Some(gid))
+                .map(|t| t.surface.as_str())
+                .collect::<String>()
         } else {
-            &token.reading
+            token.surface.clone()
+        };
+
+        // Show surface reading (conjugated form) if available, else lemma reading.
+        // For group heads, concatenate readings from all group members so the full
+        // expression reading is shown (e.g. "ねこのても借りたい" not just "ねこ").
+        // By default, hide readings for Known/Ignored words; show_all_readings overrides this.
+        let display_reading: String = if let Some(gid) = token.group_id {
+            sentence
+                .tokens
+                .iter()
+                .filter(|t| t.group_id == Some(gid))
+                .map(|t| {
+                    if !t.surface_reading.is_empty() {
+                        t.surface_reading.as_str()
+                    } else if !t.reading.is_empty() {
+                        t.reading.as_str()
+                    } else {
+                        t.surface.as_str()
+                    }
+                })
+                .collect()
+        } else if !token.surface_reading.is_empty() {
+            token.surface_reading.clone()
+        } else {
+            token.reading.clone()
         };
         let should_show_reading = state.show_all_readings
             || matches!(
@@ -136,20 +171,26 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
             );
         let reading_part = if should_show_reading
             && !display_reading.is_empty()
-            && *display_reading != token.surface
+            && display_reading != display_surface
         {
             format!(" ({})", display_reading)
         } else {
             String::new()
         };
 
-        let gloss_part = if !token.short_gloss.is_empty() {
+        // Show MWE gloss if available, otherwise use single-word gloss
+        let gloss_part = if !token.mwe_gloss.is_empty() {
+            format!(" = {}", token.mwe_gloss)
+        } else if !token.short_gloss.is_empty() {
             format!(" = {}", token.short_gloss)
         } else {
             String::new()
         };
 
-        let conj_part = if !token.conjugation_form.is_empty() {
+        // Show conjugation description (human-readable) instead of raw form
+        let conj_part = if !token.conjugation_desc.is_empty() {
+            format!(" [{}]", token.conjugation_desc)
+        } else if !token.conjugation_form.is_empty() {
             format!(" [{}]", token.conjugation_form)
         } else {
             String::new()
@@ -157,7 +198,7 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
 
         let line_text = format!(
             "{}{}{}{} [{}]{}",
-            marker, token.surface, reading_part, gloss_part, status_char, conj_part
+            marker, display_surface, reading_part, gloss_part, status_char, conj_part
         );
 
         let style = if is_selected {
@@ -174,18 +215,18 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         lines.push(Line::from(Span::styled(line_text, style)));
     }
 
-    // Stats at bottom
+    // Stats at bottom — count only navigable tokens (skip trivial + non-head group members)
     lines.push(Line::from(""));
     let new_count = sentence
         .tokens
         .iter()
-        .filter(|t| !t.is_trivial && t.vocabulary_status == VocabularyStatus::New)
+        .filter(|t| t.is_navigable() && t.vocabulary_status == VocabularyStatus::New)
         .count();
     let learning = sentence
         .tokens
         .iter()
         .filter(|t| {
-            !t.is_trivial
+            t.is_navigable()
                 && matches!(
                     t.vocabulary_status,
                     VocabularyStatus::Learning1
@@ -198,7 +239,7 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
     let known = sentence
         .tokens
         .iter()
-        .filter(|t| !t.is_trivial && t.vocabulary_status == VocabularyStatus::Known)
+        .filter(|t| t.is_navigable() && t.vocabulary_status == VocabularyStatus::Known)
         .count();
 
     lines.push(Line::from(vec![

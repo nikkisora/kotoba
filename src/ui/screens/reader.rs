@@ -112,7 +112,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         readings_indicator,
         known_indicator,
         Span::styled(
-            " ↑↓:sentence ←→:word 1-5:status i:ignore Enter:detail ",
+            " ↑↓:sentence ←→:word 1-5:status i:ignore Enter:detail m:expr ",
             Style::default().fg(Color::DarkGray),
         ),
     ]);
@@ -203,12 +203,32 @@ fn render_main_text(frame: &mut Frame, app: &App, state: &crate::app::ReaderStat
             break;
         }
 
-        // Prepare tokens with selection state
+        // Prepare tokens with selection state.
+        // Expression marking mode: highlight the entire marked range.
+        // Normal mode: when a group head is selected, highlight all group members.
         let mut display_tokens = sentence.tokens.clone();
         if sent_idx == state.sentence_index {
-            if let Some(wi) = state.word_index {
+            if let Some((mark_start, mark_end)) = state.expression_mark {
+                // Expression marking mode: highlight the range
+                for idx in mark_start..=mark_end {
+                    if idx < display_tokens.len() {
+                        display_tokens[idx].is_selected = true;
+                    }
+                }
+            } else if let Some(wi) = state.word_index {
                 if wi < display_tokens.len() {
-                    display_tokens[wi].is_selected = true;
+                    let selected_group = display_tokens[wi].group_id;
+                    if let Some(gid) = selected_group {
+                        // Highlight all tokens in this group
+                        for tok in &mut display_tokens {
+                            if tok.group_id == Some(gid) {
+                                tok.is_selected = true;
+                            }
+                        }
+                    } else {
+                        // Standalone token
+                        display_tokens[wi].is_selected = true;
+                    }
                 }
             }
         }

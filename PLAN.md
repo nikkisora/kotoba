@@ -857,3 +857,222 @@ Items identified but explicitly deferred to keep scope manageable.
 - [ ] **Multi-language support**: Generalize beyond Japanese (Chinese, Korean — different tokenizers)
 - [ ] **Cloud sync**: Optional sync of vocabulary/SRS state across devices
 - [ ] **Plugin system**: User-defined import sources or LLM prompt templates
+
+---
+
+### Enhancement: Conjugation Grouping, Multi-Word Expressions & Conjugation Descriptions
+
+**Problem Statement**
+
+Currently, lindera/UniDic tokenizes text into minimal morphemes. This causes two user-facing problems:
+
+1. **Conjugated forms are split**: `食べない` → `食べ`(Verb) + `ない`(Auxiliary). Only the verb stem `食べ` is highlighted; the auxiliary `ない` appears unhighlighted (auto-ignored). The user sees a broken-looking partial highlight instead of the full conjugated word.
+
+2. **Idiomatic expressions are atomized**: `猫の手も借りたい` → `猫` + `の` + `手` + `も` + `借り` + `たい`. Each morpheme is treated independently, losing the idiomatic meaning ("so busy you'd even borrow a cat's paws").
+
+3. **Conjugation labels are raw UniDic**: The sidebar shows cryptic labels like `continuative (general)` instead of learner-friendly descriptions like `verb, negative, past`.
+
+**Test Data**: `data/sample_hard.txt`
+
+```
+昨日はとても忙しくて、猫の手も借りたいほどでした。新しい自動車運転免許証を受け取りに行かなければならなかったからです。複雑な手続きに気が遠くなりそうでしたが、なんとか終わらせて安堵しています。
+食べない。食べます。食べる。食べられる。食べよう。
+```
+
+**Approach chosen**: Keep lindera for morphological analysis (embedded UniDic, no external dictionary files). Add two post-processing layers at display time.
+
+**Why NOT sudachi.rs**:
+- Not on crates.io (git dependency only)
+- Requires external dictionary files (~70-100MB), cannot embed in binary — breaks the current zero-config single-binary distribution
+- Dictionary baking feature listed as "un-implemented and does not work currently"
+- Still splits conjugations the same way (morphological analyzers decompose inflections by design)
+- Only helps with compound nouns (Mode C), not idioms containing particles/verbs
+- Conclusion: significant cost for marginal benefit over lindera
+
+**How yomitan was used as reference**: Yomitan's `japanese-transforms.js` contains comprehensive deinflection rules mapping conjugated suffix patterns → dictionary forms. These rules were used as a reference to build the auxiliary chain → human-readable label mapping (e.g., `ない` → "negative", `ます` → "polite", `た` → "past"). Yomitan's actual approach (substring scanning + deinflection) is designed for hover-lookup, not full-text tokenization, so it was used for linguistic reference only.
+
+---
+
+#### Layer 1 — Conjugation Group Merging
+
+**Concept**: After lindera tokenizes and `build_sentences()` creates `TokenDisplay` items, a grouping pass merges verb/adjective stems with their following auxiliaries into "conjugation groups". All tokens in a group share the head word's `vocabulary_status`, so the entire conjugated form highlights as one unit.
+
+**New `TokenDisplay` fields**:
+
+```rust
+pub group_id: Option<usize>,      // Shared group index within the sentence (None = standalone)
+pub is_group_head: bool,          // True for the vocabulary-bearing head token
+pub conjugation_desc: String,     // Human-readable: "verb, negative, past"
+pub mwe_gloss: String,            // For MWE groups: the expression's English meaning
+```
+
+**Grouping rules** (`assign_conjugation_groups`):
+
+1. Scan tokens left-to-right
+2. When a **Verb** or **Adjective** token is found, start a new group
+3. Continue adding tokens while the next token's POS is **Auxiliary** (助動詞)
+4. Stop at any non-Auxiliary token (Noun, Verb, Particle, Symbol, etc.)
+5. All group members inherit the head token's `vocabulary_status`
+6. Navigation skips non-head group members (Left/Right jumps between group heads)
+7. Selection highlights the entire group (all members get `is_selected = true`)
+
+**Why only Auxiliary and not Particle**: UniDic tags `て`, `ば` as Particle (接続助詞). These particles genuinely separate grammatical clauses (e.g., `食べている` = `食べ` + `て` + `いる` — three separate concepts). Grouping past a Particle would incorrectly merge separate clauses. The Auxiliary-only rule correctly groups:
+
+| Input | Tokens | Group |
+|---|---|---|
+| `食べない` | `食べ`(V) + `ない`(Aux) | `[食べない]` → "verb, negative" |
+| `食べます` | `食べ`(V) + `ます`(Aux) | `[食べます]` → "verb, polite" |
+| `食べた` | `食べ`(V) + `た`(Aux) | `[食べた]` → "verb, past" |
+| `食べられる` | `食べ`(V) + `られる`(Aux) | `[食べられる]` → "verb, passive/potential" |
+| `食べさせたい` | `食べ`(V) + `させ`(Aux) + `たい`(Aux) | `[食べさせたい]` → "verb, causative, want to" |
+| `行かなければ` | `行か`(V) + `なけれ`(Aux) | `[行かなけれ]` + `ば`(Particle standalone) |
+
+**Conjugation description generation** (`build_conjugation_description`):
+
+Map auxiliary `base_form` values to human-readable English labels:
+
+```rust
+match base_form {
+    "ない"           => "negative",
+    "ます"           => "polite",
+    "た" | "だ"      => "past",
+    "て" | "で"      => "te-form",
+    "れる" | "られる" => "passive/potential",
+    "せる" | "させる" => "causative",
+    "たい"           => "want to",
+    "う" | "よう"     => "volitional",
+    "ぬ"             => "negative (classical)",
+    "ず"             => "negative (literary)",
+    "まい"           => "negative volitional",
+    "そう"           => "looks like",
+    "らしい"         => "seems like",
+    "べし"           => "should (classical)",
+    "です"           => "copula (polite)",
+    "だ"             => "copula",
+    _                => raw base_form as fallback,
+}
+```
+
+Head POS is prepended: `"verb, "` or `"adjective, "`.
+Chain is comma-separated: `"verb, causative, negative, past"`.
+
+Also use the **conjugation_form** of the head token to detect additional inflection info:
+- 未然形 (irrealis) on the head with no auxiliary → note the stem form
+- 仮定形 (conditional) on the last auxiliary → append "conditional"
+- 命令形 (imperative) on the head → append "imperative"
+- 意志推量形 (volitional) on the head → append "volitional"
+
+**Example full descriptions**:
+
+| Surface | Description |
+|---|---|
+| 食べない | verb, negative |
+| 食べました | verb, polite, past |
+| 食べられなかった | verb, passive/potential, negative, past |
+| 食べさせたい | verb, causative, want to |
+| 行かなけれ | verb, negative, conditional |
+| 食べよう | verb, volitional |
+
+---
+
+#### Layer 2 — Multi-Word Expression (MWE) Detection
+
+Two sub-systems: automatic JMdict matching and manual user expressions.
+
+##### 2A — Automatic JMdict MWE Detection
+
+**Concept**: After tokenization, scan sliding windows of consecutive tokens and check if their concatenated surface matches a JMdict kanji element. JMdict already contains many multi-word expressions (idioms, set phrases, compound verbs).
+
+**Algorithm** (in `detect_sentence_mwes`):
+
+```
+For each starting token position i in the sentence:
+    combined = ""
+    For j = i to min(i+12, len):     # max window of 12 tokens
+        combined += tokens[j].surface
+        if j > i:                     # skip single-token matches (already handled)
+            if has_jmdict_kanji_entry(combined):
+                record match (start=i, end=j+1, surface=combined)
+                keep only the longest match at each position (greedy)
+    advance i past the longest match (no overlaps)
+```
+
+**Performance**: Uses a lightweight `SELECT 1 FROM jmdict_kanji WHERE kanji_element = ? LIMIT 1` existence check (indexed, ~10μs per query). For a 20-token sentence with max window 12, worst case ~200 queries = ~2ms. Acceptable for interactive use.
+
+**MWE groups in display**:
+- All tokens in an MWE match share a single `group_id`
+- The first non-trivial token is the `group_head` (navigation target)
+- `mwe_gloss` is set to the JMdict short_gloss for the expression
+- `vocabulary_status` is looked up for the full expression surface (allowing the user to set status on the entire idiom)
+- MWE groups take priority over conjugation groups (if tokens overlap, MWE wins)
+
+**Caching**: MWE matches are computed once during `load_text()` and stored in `ReaderState.mwe_matches: Vec<Vec<MweMatch>>` (per-sentence). On `refresh_reader_display()`, the cached matches are re-applied without DB queries.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct MweMatch {
+    pub start: usize,       // First token index in the sentence
+    pub end: usize,         // One past last token index
+    pub surface: String,    // Concatenated surface text
+    pub reading: String,    // From JMdict
+    pub gloss: String,      // English meaning from JMdict
+}
+```
+
+##### 2B — Manual User Expressions
+
+**DB migration (version 16)**: New `user_expressions` table:
+
+```sql
+CREATE TABLE IF NOT EXISTS user_expressions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    surface TEXT NOT NULL,
+    reading TEXT NOT NULL DEFAULT '',
+    gloss TEXT NOT NULL DEFAULT '',
+    status INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_expr_surface ON user_expressions(surface);
+```
+
+**UI for creating expressions**:
+- In the reader, user navigates to a word, then enters "expression mode" (keybinding: `m` for "mark expression")
+- Left/Right extends the selection range visually (all tokens in range highlight)
+- Enter confirms → popup to edit reading and gloss → saved to `user_expressions`
+- Expression is immediately detected in all sentences going forward
+
+**User expressions take highest priority**: user expression > JMdict MWE > conjugation group.
+
+**Integration into MWE detection**: During `load_text()`, user expressions are loaded from DB into `ReaderState.user_expression_cache: HashMap<String, UserExpression>`. The MWE detection loop checks user expressions FIRST (before JMdict), using the same sliding-window approach.
+
+---
+
+#### Files Modified
+
+| File | Changes |
+|---|---|
+| `src/app.rs` | Add fields to `TokenDisplay`, add `MweMatch`/caches to `ReaderState`, modify `build_sentences()`, add `apply_groups()`, modify `load_text()` and `refresh_reader_display()` to call grouping, modify `set_word_status()` to propagate to group members |
+| `src/core/tokenizer.rs` | Add `assign_conjugation_groups()`, `build_conjugation_description()`, `auxiliary_label()` functions |
+| `src/ui/screens/reader.rs` | Modify selection: when `word_index` points to a group head, mark all group members as `is_selected` |
+| `src/ui/components/sidebar.rs` | Show `conjugation_desc` instead of raw conjugation form/type; show `mwe_gloss` for MWE groups; show grouped surface in word list |
+| `src/ui/components/furigana.rs` | No changes needed (status propagation handles highlighting automatically) |
+| `src/main.rs` | Modify Left/Right navigation to skip non-head group members; add `m` keybinding for manual MWE creation |
+| `src/db/schema.rs` | Add migration 16: `user_expressions` table |
+| `src/db/models.rs` | Add `UserExpression` struct, CRUD functions, `MweMatch` persistence helpers |
+| `src/core/dictionary.rs` | Add `has_jmdict_entry()` fast existence check, add `lookup_gloss_only()` for MWE detection |
+
+#### Order of Implementation
+
+1. Add new fields to `TokenDisplay` + `MweMatch` struct
+2. Implement conjugation grouping logic + description generation in `tokenizer.rs`
+3. Integrate grouping into `build_sentences()` / `load_text()` / `refresh_reader_display()`
+4. Update word navigation in `main.rs` to skip group members
+5. Update selection display in `reader.rs` for group highlighting
+6. Update `sidebar.rs` to show conjugation descriptions and MWE glosses
+7. Update `set_word_status()` to propagate status to group members
+8. Add DB migration + models for `user_expressions` table
+9. Implement automatic JMdict MWE detection during `load_text()`
+10. Add manual MWE creation keybinding and UI
+11. Build and verify with `data/sample_hard.txt`

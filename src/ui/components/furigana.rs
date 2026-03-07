@@ -40,6 +40,157 @@ fn has_kanji(s: &str) -> bool {
     })
 }
 
+/// Whether a token should show furigana given current display settings.
+fn token_needs_furigana(t: &TokenDisplay, show_furigana: bool, force_all_furigana: bool) -> bool {
+    let furigana_reading = if !t.surface_reading.is_empty() {
+        &t.surface_reading
+    } else {
+        &t.reading
+    };
+    show_furigana
+        && has_kanji(&t.surface)
+        && !furigana_reading.is_empty()
+        && t.surface != furigana_reading.as_str()
+        && !t.is_trivial
+        && (force_all_furigana
+            || matches!(
+                t.vocabulary_status,
+                VocabularyStatus::New
+                    | VocabularyStatus::Learning1
+                    | VocabularyStatus::Learning2
+                    | VocabularyStatus::Learning3
+            ))
+}
+
+/// Get the furigana reading string for a token.
+fn furigana_reading(t: &TokenDisplay) -> &str {
+    if !t.surface_reading.is_empty() {
+        &t.surface_reading
+    } else {
+        &t.reading
+    }
+}
+
+/// A layout slot — either a single standalone token or a merged group of tokens.
+struct Slot {
+    surface: String,
+    reading: String,
+    surface_width: usize,
+    reading_width: usize,
+    slot_width: usize,
+    needs_furigana: bool,
+    style: Style,
+}
+
+/// Build layout slots from tokens, merging consecutive tokens that share the same
+/// group_id into a single slot. This ensures groups render as one visual unit with
+/// one combined furigana span, eliminating both inter-token gaps and furigana overlap.
+fn build_slots(
+    tokens: &[TokenDisplay],
+    show_furigana: bool,
+    force_all_furigana: bool,
+) -> Vec<Slot> {
+    let mut slots: Vec<Slot> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        let t = &tokens[i];
+
+        if let Some(gid) = t.group_id {
+            // Collect all consecutive tokens with the same group_id.
+            // (Group members are always consecutive in the token list.)
+            let group_start = i;
+            while i < tokens.len() && tokens[i].group_id == Some(gid) {
+                i += 1;
+            }
+            let group = &tokens[group_start..i];
+
+            // Merge surface and reading from all group members
+            let mut merged_surface = String::new();
+            let mut merged_reading = String::new();
+            let mut any_needs = false;
+            // Use the head's style (all members have the same vocabulary_status)
+            let head = group.iter().find(|t| t.is_group_head).unwrap_or(&group[0]);
+            let any_selected = group.iter().any(|t| t.is_selected);
+            let style = if head.is_trivial {
+                if any_selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                }
+            } else {
+                status_style(head.vocabulary_status, any_selected)
+            };
+
+            for member in group {
+                merged_surface.push_str(&member.surface);
+                // For the merged reading: use surface_reading/reading for kanji
+                // tokens, and the surface itself for kana-only tokens (particles, etc.)
+                if token_needs_furigana(member, show_furigana, force_all_furigana) {
+                    any_needs = true;
+                    merged_reading.push_str(furigana_reading(member));
+                } else {
+                    // Kana-only member or furigana suppressed: use surface as reading
+                    merged_reading.push_str(&member.surface);
+                }
+            }
+
+            let surface_width = UnicodeWidthStr::width(merged_surface.as_str());
+            let reading_width = if any_needs {
+                UnicodeWidthStr::width(merged_reading.as_str())
+            } else {
+                0
+            };
+            // Merged reading may differ from merged surface even if individual
+            // kana tokens were the same, because kanji tokens contribute readings.
+            let needs_furigana = any_needs && merged_surface != merged_reading;
+            let reading_width = if needs_furigana { reading_width } else { 0 };
+            let slot_width = surface_width.max(reading_width);
+
+            slots.push(Slot {
+                surface: merged_surface,
+                reading: merged_reading,
+                surface_width,
+                reading_width,
+                slot_width,
+                needs_furigana,
+                style,
+            });
+        } else {
+            // Standalone token — same logic as before
+            let surface_width = UnicodeWidthStr::width(t.surface.as_str());
+            let fr = furigana_reading(t);
+            let needs_furigana = token_needs_furigana(t, show_furigana, force_all_furigana);
+            let reading_width = if needs_furigana {
+                UnicodeWidthStr::width(fr)
+            } else {
+                0
+            };
+            let slot_width = surface_width.max(reading_width);
+            let style = if t.is_trivial {
+                if t.is_selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                }
+            } else {
+                status_style(t.vocabulary_status, t.is_selected)
+            };
+
+            slots.push(Slot {
+                surface: t.surface.clone(),
+                reading: fr.to_string(),
+                surface_width,
+                reading_width,
+                slot_width,
+                needs_furigana,
+                style,
+            });
+            i += 1;
+        }
+    }
+    slots
+}
+
 /// Compute the exact height (in terminal rows) a sentence would occupy when rendered.
 /// Uses the same layout algorithm as `render_sentence` but without writing to a buffer.
 pub fn sentence_height(
@@ -54,39 +205,8 @@ pub fn sentence_height(
     }
 
     let usable_width = width as usize;
-    let mut any_furigana = false;
-
-    let slot_widths: Vec<usize> = tokens
-        .iter()
-        .map(|t| {
-            let surface_width = UnicodeWidthStr::width(t.surface.as_str());
-            let furigana_reading = if !t.surface_reading.is_empty() {
-                &t.surface_reading
-            } else {
-                &t.reading
-            };
-            let needs = show_furigana
-                && has_kanji(&t.surface)
-                && !furigana_reading.is_empty()
-                && t.surface != furigana_reading.as_str()
-                && !t.is_trivial
-                && (force_all_furigana
-                    || matches!(
-                        t.vocabulary_status,
-                        VocabularyStatus::New
-                            | VocabularyStatus::Learning1
-                            | VocabularyStatus::Learning2
-                            | VocabularyStatus::Learning3
-                    ));
-            if needs {
-                any_furigana = true;
-                let reading_width = UnicodeWidthStr::width(furigana_reading.as_str());
-                surface_width.max(reading_width)
-            } else {
-                surface_width
-            }
-        })
-        .collect();
+    let slots = build_slots(tokens, show_furigana, force_all_furigana);
+    let any_furigana = slots.iter().any(|s| s.needs_furigana);
 
     let line_height: u16 = if any_furigana { 2 } else { 1 };
     let text_width = usable_width.saturating_sub(if is_current { 2 } else { 0 });
@@ -97,12 +217,12 @@ pub fn sentence_height(
     let mut lines_used: u16 = 0;
     let mut col: usize = 0;
 
-    for &sw in &slot_widths {
-        if col + sw > text_width && col > 0 {
+    for slot in &slots {
+        if col + slot.slot_width > text_width && col > 0 {
             lines_used += 1;
             col = 0;
         }
-        col += sw;
+        col += slot.slot_width;
     }
 
     (lines_used + 1) * line_height
@@ -127,75 +247,8 @@ pub fn render_sentence(
     }
 
     let usable_width = area.width as usize;
-
-    struct TokenLayout {
-        surface: String,
-        reading: String,
-        surface_width: usize,
-        reading_width: usize,
-        /// The slot width this token occupies (max of surface and reading widths).
-        slot_width: usize,
-        needs_furigana: bool,
-        style: Style,
-    }
-
-    let layouts: Vec<TokenLayout> = tokens
-        .iter()
-        .map(|t| {
-            let surface_width = UnicodeWidthStr::width(t.surface.as_str());
-            // Use surface_reading for furigana (matches conjugated form),
-            // falling back to lemma reading if surface_reading is empty.
-            let furigana_reading = if !t.surface_reading.is_empty() {
-                &t.surface_reading
-            } else {
-                &t.reading
-            };
-            let needs_furigana = show_furigana
-                && has_kanji(&t.surface)
-                && !furigana_reading.is_empty()
-                && t.surface != furigana_reading.as_str()
-                && !t.is_trivial
-                && (force_all_furigana
-                    || matches!(
-                        t.vocabulary_status,
-                        VocabularyStatus::New
-                            | VocabularyStatus::Learning1
-                            | VocabularyStatus::Learning2
-                            | VocabularyStatus::Learning3
-                    ));
-            let reading_width = if needs_furigana {
-                UnicodeWidthStr::width(furigana_reading.as_str())
-            } else {
-                0
-            };
-            // The slot width is the max of surface and reading to prevent overlap
-            let slot_width = if needs_furigana {
-                surface_width.max(reading_width)
-            } else {
-                surface_width
-            };
-            let style = if t.is_trivial {
-                if t.is_selected {
-                    Style::default().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
-                }
-            } else {
-                status_style(t.vocabulary_status, t.is_selected)
-            };
-            TokenLayout {
-                surface: t.surface.clone(),
-                reading: furigana_reading.to_string(),
-                surface_width,
-                reading_width,
-                slot_width,
-                needs_furigana,
-                style,
-            }
-        })
-        .collect();
-
-    let any_furigana = layouts.iter().any(|l| l.needs_furigana);
+    let slots = build_slots(tokens, show_furigana, force_all_furigana);
+    let any_furigana = slots.iter().any(|s| s.needs_furigana);
     let line_height: u16 = if any_furigana { 2 } else { 1 };
 
     let mut lines_used: u16 = 0;
@@ -219,9 +272,9 @@ pub fn render_sentence(
     let text_x = area.x + if is_current { 2 } else { 0 };
     let text_width = usable_width.saturating_sub(if is_current { 2 } else { 0 });
 
-    for layout in &layouts {
-        // Check if token fits on current line
-        if col + layout.slot_width > text_width && col > 0 {
+    for slot in &slots {
+        // Check if slot fits on current line
+        if col + slot.slot_width > text_width && col > 0 {
             lines_used += 1;
             col = 0;
             current_line_y = area.y + lines_used * line_height;
@@ -234,10 +287,10 @@ pub fn render_sentence(
         let x = text_x + col as u16;
 
         // Render furigana line (centered above the slot)
-        if any_furigana && layout.needs_furigana {
+        if any_furigana && slot.needs_furigana {
             let furigana_y = current_line_y;
-            let pad = if layout.slot_width > layout.reading_width {
-                (layout.slot_width - layout.reading_width) / 2
+            let pad = if slot.slot_width > slot.reading_width {
+                (slot.slot_width - slot.reading_width) / 2
             } else {
                 0
             };
@@ -246,7 +299,7 @@ pub fn render_sentence(
                 buf.set_string(
                     x + pad as u16,
                     furigana_y,
-                    &layout.reading,
+                    &slot.reading,
                     Style::default().fg(Color::DarkGray),
                 );
             }
@@ -260,20 +313,15 @@ pub fn render_sentence(
         };
 
         if text_y < area.y + area.height {
-            let surface_pad = if layout.slot_width > layout.surface_width {
-                (layout.slot_width - layout.surface_width) / 2
+            let surface_pad = if slot.slot_width > slot.surface_width {
+                (slot.slot_width - slot.surface_width) / 2
             } else {
                 0
             };
-            buf.set_string(
-                x + surface_pad as u16,
-                text_y,
-                &layout.surface,
-                layout.style,
-            );
+            buf.set_string(x + surface_pad as u16, text_y, &slot.surface, slot.style);
         }
 
-        col += layout.slot_width;
+        col += slot.slot_width;
     }
 
     (lines_used + 1) * line_height

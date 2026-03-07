@@ -338,6 +338,43 @@ pub fn lookup(conn: &Connection, base_form: &str, reading: Option<&str>) -> Resu
     Ok(entries)
 }
 
+/// Fast existence check: does this surface text exist as a JMdict kanji element?
+/// Uses indexed lookup, ~10μs per query. Returns true if found.
+pub fn has_jmdict_kanji_entry(conn: &Connection, surface: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM jmdict_kanji WHERE kanji_element = ?1 LIMIT 1",
+        params![surface],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+/// Look up the short gloss and reading for a surface text from JMdict.
+/// Returns (reading, gloss) if found. Used for MWE detection to populate
+/// the MweMatch with the expression's meaning.
+pub fn lookup_mwe_info(conn: &Connection, surface: &str) -> Option<(String, String)> {
+    // Try kanji element lookup
+    let result: Option<String> = conn
+        .query_row(
+            "SELECT e.json_blob FROM jmdict_entries e
+             JOIN jmdict_kanji k ON k.entry_id = e.ent_seq
+             WHERE k.kanji_element = ?1 LIMIT 1",
+            params![surface],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(json) = result {
+        if let Ok(entry) = serde_json::from_str::<DictEntry>(&json) {
+            let reading = entry.readings.first().cloned().unwrap_or_default();
+            let gloss = entry.short_gloss();
+            return Some((reading, gloss));
+        }
+    }
+
+    None
+}
+
 // ─── Builder helpers ─────────────────────────────────────────────────
 
 struct EntryBuilder {

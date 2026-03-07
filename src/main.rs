@@ -355,6 +355,66 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handle keys while in expression marking mode.
+/// Left/Right extend the selection range, Enter saves, Esc cancels.
+fn handle_expression_mode_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Left | KeyCode::Char('h') => {
+            if let Some(ref mut state) = app.reader_state {
+                if let Some((ref mut start, _end)) = state.expression_mark {
+                    if *start > 0 {
+                        *start -= 1;
+                    }
+                }
+            }
+            show_expression_preview(app);
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if let Some(ref mut state) = app.reader_state {
+                let max_idx = state.sentences[state.sentence_index]
+                    .tokens
+                    .len()
+                    .saturating_sub(1);
+                if let Some((_start, ref mut end)) = state.expression_mark {
+                    if *end < max_idx {
+                        *end += 1;
+                    }
+                }
+            }
+            show_expression_preview(app);
+        }
+        KeyCode::Enter => {
+            if let Err(e) = app.save_expression_mark() {
+                app.set_message(format!("Error saving expression: {}", e));
+            }
+        }
+        KeyCode::Esc => {
+            if let Some(ref mut state) = app.reader_state {
+                state.expression_mark = None;
+            }
+            app.set_message("Expression marking cancelled");
+        }
+        _ => {}
+    }
+}
+
+/// Show a preview of the expression being marked in the status bar.
+fn show_expression_preview(app: &mut App) {
+    if let Some(ref state) = app.reader_state {
+        if let Some((start, end)) = state.expression_mark {
+            let sentence = &state.sentences[state.sentence_index];
+            let surface: String = sentence.tokens[start..=end]
+                .iter()
+                .map(|t| t.surface.as_str())
+                .collect();
+            app.set_message(format!(
+                "Marking: 「{}」 — ←/→ extend, Enter save, Esc cancel",
+                surface
+            ));
+        }
+    }
+}
+
 fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
     match popup {
         PopupState::WordDetail { .. } => match key.code {
@@ -942,6 +1002,18 @@ fn handle_chapter_select_key(app: &mut App, key: KeyEvent, source_id: i64) {
 }
 
 fn handle_reader_key(app: &mut App, key: KeyEvent) {
+    // Check if we're in expression marking mode
+    let in_expression_mode = app
+        .reader_state
+        .as_ref()
+        .map(|s| s.expression_mark.is_some())
+        .unwrap_or(false);
+
+    if in_expression_mode {
+        handle_expression_mode_key(app, key);
+        return;
+    }
+
     match key.code {
         // Sentence navigation
         KeyCode::Up | KeyCode::Char('k') => {
@@ -990,7 +1062,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        // Word navigation
+        // Word navigation (skips trivial tokens AND non-head group members)
         KeyCode::Left | KeyCode::Char('h') => {
             if let Some(ref mut state) = app.reader_state {
                 if state.sentences.is_empty() {
@@ -999,11 +1071,11 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                 let sentence = &state.sentences[state.sentence_index];
                 match state.word_index {
                     None => {
-                        state.word_index = sentence.tokens.iter().rposition(|t| !t.is_trivial);
+                        state.word_index = sentence.tokens.iter().rposition(|t| t.is_navigable());
                     }
                     Some(i) => {
                         let prev = if i > 0 {
-                            sentence.tokens[..i].iter().rposition(|t| !t.is_trivial)
+                            sentence.tokens[..i].iter().rposition(|t| t.is_navigable())
                         } else {
                             None
                         };
@@ -1016,7 +1088,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                                     state.sidebar_scroll = 0;
                                     let prev_sentence = &state.sentences[state.sentence_index];
                                     state.word_index =
-                                        prev_sentence.tokens.iter().rposition(|t| !t.is_trivial);
+                                        prev_sentence.tokens.iter().rposition(|t| t.is_navigable());
                                 }
                             }
                         }
@@ -1033,12 +1105,12 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                         match state.word_index {
                             None => {
                                 state.word_index =
-                                    sentence.tokens.iter().position(|t| !t.is_trivial);
+                                    sentence.tokens.iter().position(|t| t.is_navigable());
                             }
                             Some(i) => {
                                 let next = sentence.tokens[i + 1..]
                                     .iter()
-                                    .position(|t| !t.is_trivial)
+                                    .position(|t| t.is_navigable())
                                     .map(|p| p + i + 1);
                                 match next {
                                     Some(n) => state.word_index = Some(n),
@@ -1053,7 +1125,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                                             state.word_index = next_sentence
                                                 .tokens
                                                 .iter()
-                                                .position(|t| !t.is_trivial);
+                                                .position(|t| t.is_navigable());
                                             advanced_from = Some((dep, false));
                                         } else {
                                             // Last word of last sentence
@@ -1169,6 +1241,18 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Err(e) = app.undo_last_autopromote() {
                 app.set_message(format!("Undo error: {}", e));
+            }
+        }
+
+        // Mark expression (enter expression marking mode)
+        KeyCode::Char('m') => {
+            if let Some(ref mut state) = app.reader_state {
+                if let Some(wi) = state.word_index {
+                    state.expression_mark = Some((wi, wi));
+                    app.set_message("Expression mode: ←/→ to extend, Enter to save, Esc to cancel");
+                } else {
+                    app.set_message("Select a word first (←/→), then press 'm' to mark expression");
+                }
             }
         }
 

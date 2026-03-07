@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::config::AppConfig;
 use crate::core::dictionary::{self, DictEntry};
+use crate::core::tokenizer::{self, GroupToken};
 use crate::db::models::{self, TextStats, Vocabulary, VocabularyStatus};
 
 /// Compute a reasonable page_size for chapter select based on terminal height.
@@ -77,6 +78,37 @@ pub struct TokenDisplay {
     pub conjugation_form: String,
     pub conjugation_type: String,
     pub is_trivial: bool,
+    /// Shared group index within the sentence (None = standalone token).
+    pub group_id: Option<usize>,
+    /// True for the vocabulary-bearing head token of a conjugation/MWE group.
+    pub is_group_head: bool,
+    /// Human-readable conjugation description: "verb, negative, past".
+    pub conjugation_desc: String,
+    /// For MWE groups: the expression's English meaning.
+    pub mwe_gloss: String,
+}
+
+impl TokenDisplay {
+    /// Whether this token should be a navigation target when using Left/Right keys.
+    /// Skips trivial tokens and non-head group members (auxiliaries in conjugation groups).
+    pub fn is_navigable(&self) -> bool {
+        !self.is_trivial && (self.group_id.is_none() || self.is_group_head)
+    }
+}
+
+/// A multi-word expression match detected in a sentence.
+#[derive(Debug, Clone)]
+pub struct MweMatch {
+    /// First token index in the sentence.
+    pub start: usize,
+    /// One past the last token index.
+    pub end: usize,
+    /// Concatenated surface text of the matched tokens.
+    pub surface: String,
+    /// Reading from JMdict or user expression.
+    pub reading: String,
+    /// English meaning.
+    pub gloss: String,
 }
 
 /// Data for a single sentence in the reader.
@@ -128,6 +160,11 @@ pub struct ReaderState {
     pub show_all_readings: bool,
     /// Whether to show Known/Ignored words in the sidebar word list (per-session toggle, default false).
     pub show_known_in_sidebar: bool,
+    /// Cached MWE matches per sentence (computed once during load_text).
+    pub mwe_matches: Vec<Vec<MweMatch>>,
+    /// Expression marking mode: Some((start, end)) token indices in current sentence.
+    /// When active, Left/Right extend the range. Enter saves, Esc cancels.
+    pub expression_mark: Option<(usize, usize)>,
 }
 
 /// How the library list is sorted.
@@ -868,7 +905,14 @@ impl App {
             }
         }
 
-        let sentences = build_sentences(&paragraphs, &vocabulary_cache, &gloss_cache);
+        let mut sentences = build_sentences(&paragraphs, &vocabulary_cache, &gloss_cache);
+
+        // Detect MWE matches (JMdict + user expressions) and apply to tokens
+        let user_expressions = models::list_user_expressions(&conn).unwrap_or_default();
+        let mwe_matches = detect_all_mwe_matches(&conn, &sentences, &user_expressions);
+        for (sent_idx, matches) in mwe_matches.iter().enumerate() {
+            apply_mwe_matches(&mut sentences[sent_idx].tokens, matches);
+        }
 
         // Restore saved reading progress
         let saved_index = models::get_reading_progress(&conn, text_id).unwrap_or(0);
@@ -897,6 +941,8 @@ impl App {
             autopromote_history: Vec::new(),
             show_all_readings: false,
             show_known_in_sidebar: false,
+            mwe_matches,
+            expression_mark: None,
         });
 
         self.previous_screen = Some(self.screen.clone());
@@ -913,6 +959,12 @@ impl App {
                 &state.vocabulary_cache,
                 &state.gloss_cache,
             );
+            // Re-apply cached MWE matches (no DB access needed)
+            for (sent_idx, matches) in state.mwe_matches.iter().enumerate() {
+                if sent_idx < state.sentences.len() {
+                    apply_mwe_matches(&mut state.sentences[sent_idx].tokens, matches);
+                }
+            }
         }
         Ok(())
     }
@@ -954,11 +1006,27 @@ impl App {
                     .vocabulary_cache
                     .insert((base_form.clone(), reading.clone()), vocab);
             }
-            // Patch all tokens matching this base_form+reading
+            // Patch all tokens matching this base_form+reading, and propagate
+            // status to all group members (auxiliaries) in the same group.
             for sentence in &mut state.sentences {
-                for token in &mut sentence.tokens {
+                // First pass: update the head tokens that match
+                let mut affected_groups: Vec<usize> = Vec::new();
+                for token in sentence.tokens.iter_mut() {
                     if token.base_form == base_form && token.reading == reading {
                         token.vocabulary_status = status;
+                        if let Some(gid) = token.group_id {
+                            affected_groups.push(gid);
+                        }
+                    }
+                }
+                // Second pass: propagate to group members
+                if !affected_groups.is_empty() {
+                    for token in sentence.tokens.iter_mut() {
+                        if let Some(gid) = token.group_id {
+                            if affected_groups.contains(&gid) {
+                                token.vocabulary_status = status;
+                            }
+                        }
                     }
                 }
             }
@@ -993,11 +1061,12 @@ impl App {
             return Ok(0);
         }
 
-        // Collect New words from the departing sentence (deduplicated by base_form+reading)
+        // Collect New words from the departing sentence (deduplicated by base_form+reading).
+        // Only promote navigable tokens (skip trivial + non-head group members).
         let mut seen = std::collections::HashSet::new();
         let mut to_promote: Vec<(String, String)> = Vec::new();
         for token in &state.sentences[sentence_index].tokens {
-            if token.is_trivial {
+            if !token.is_navigable() {
                 continue;
             }
             if token.vocabulary_status != VocabularyStatus::New {
@@ -1039,9 +1108,23 @@ impl App {
                             .insert((base_form.clone(), reading.clone()), vocab);
                     }
                     for sentence in &mut state.sentences {
-                        for token in &mut sentence.tokens {
+                        let mut affected_groups: Vec<usize> = Vec::new();
+                        for token in sentence.tokens.iter_mut() {
                             if token.base_form == *base_form && token.reading == *reading {
                                 token.vocabulary_status = VocabularyStatus::Known;
+                                if let Some(gid) = token.group_id {
+                                    affected_groups.push(gid);
+                                }
+                            }
+                        }
+                        // Propagate to group members
+                        if !affected_groups.is_empty() {
+                            for token in sentence.tokens.iter_mut() {
+                                if let Some(gid) = token.group_id {
+                                    if affected_groups.contains(&gid) {
+                                        token.vocabulary_status = VocabularyStatus::Known;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1103,7 +1186,7 @@ impl App {
 
     /// Open word detail popup for the currently selected word.
     pub fn open_word_detail(&mut self) -> Result<()> {
-        let (base_form, reading, notes, vocab_id) = {
+        let (base_form, reading, notes, vocab_id, mwe_surface, mwe_gloss) = {
             let state = match self.reader_state.as_ref() {
                 Some(s) => s,
                 None => return Ok(()),
@@ -1124,6 +1207,23 @@ impl App {
                 self.set_message("No dictionary entry for punctuation");
                 return Ok(());
             }
+
+            // Check if this token is an MWE group head
+            let (mwe_surface, mwe_gloss) =
+                if token.is_group_head && !token.mwe_gloss.is_empty() && token.group_id.is_some() {
+                    // Reconstruct the full MWE surface from all group members
+                    let gid = token.group_id.unwrap();
+                    let surface: String = sentence
+                        .tokens
+                        .iter()
+                        .filter(|t| t.group_id == Some(gid))
+                        .map(|t| t.surface.as_str())
+                        .collect();
+                    (Some(surface), Some(token.mwe_gloss.clone()))
+                } else {
+                    (None, None)
+                };
+
             let key = (token.base_form.clone(), token.reading.clone());
             let vocab = state.vocabulary_cache.get(&key);
             let notes = vocab.and_then(|v| v.notes.clone());
@@ -1133,11 +1233,32 @@ impl App {
                 token.reading.clone(),
                 notes,
                 vocab_id,
+                mwe_surface,
+                mwe_gloss,
             )
         };
 
         let conn = self.open_db()?;
-        let entries = dictionary::lookup(&conn, &base_form, None)?;
+
+        // For MWE group heads, look up the full expression surface in JMdict;
+        // fall back to the head's base_form if no expression-level entry is found.
+        let (display_form, entries) = if let Some(ref mwe_surf) = mwe_surface {
+            let mwe_entries = dictionary::lookup(&conn, mwe_surf, None)?;
+            if mwe_entries.is_empty() {
+                // No JMdict entry for the full expression — fall back to head word
+                (
+                    base_form.clone(),
+                    dictionary::lookup(&conn, &base_form, None)?,
+                )
+            } else {
+                (mwe_surf.clone(), mwe_entries)
+            }
+        } else {
+            (
+                base_form.clone(),
+                dictionary::lookup(&conn, &base_form, None)?,
+            )
+        };
 
         let conjugations = if let Some(vid) = vocab_id {
             let mut stmt = conn.prepare(
@@ -1151,12 +1272,28 @@ impl App {
             vec![]
         };
 
+        // For MWE expressions where JMdict had no entry, show the gloss from
+        // the MWE match as a synthetic note so the user still sees the meaning.
+        let effective_notes = if entries.is_empty() {
+            if let Some(ref gloss) = mwe_gloss {
+                Some(format!(
+                    "{}{}",
+                    gloss,
+                    notes.map(|n| format!("\n{}", n)).unwrap_or_default()
+                ))
+            } else {
+                notes
+            }
+        } else {
+            notes
+        };
+
         self.popup = Some(PopupState::WordDetail {
-            base_form,
+            base_form: display_form,
             reading,
             entries,
             conjugations,
-            notes,
+            notes: effective_notes,
             scroll: 0,
         });
 
@@ -1592,6 +1729,65 @@ impl App {
         self.popup = None;
         Ok(())
     }
+
+    /// Save the currently marked expression range as a user expression.
+    /// Concatenates token surfaces from start..=end, saves to DB,
+    /// and re-detects MWE matches.
+    pub fn save_expression_mark(&mut self) -> Result<()> {
+        let (surface, sent_idx) = {
+            let state = match self.reader_state.as_ref() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            let (start, end) = match state.expression_mark {
+                Some(range) => range,
+                None => return Ok(()),
+            };
+            let sentence = &state.sentences[state.sentence_index];
+            let surface: String = sentence.tokens[start..=end]
+                .iter()
+                .map(|t| t.surface.as_str())
+                .collect();
+            (surface, state.sentence_index)
+        };
+
+        if surface.is_empty() {
+            self.set_message("Empty expression");
+            if let Some(ref mut state) = self.reader_state {
+                state.expression_mark = None;
+            }
+            return Ok(());
+        }
+
+        let conn = self.open_db()?;
+
+        // Look up gloss from JMdict if available
+        let (reading, gloss) = dictionary::lookup_mwe_info(&conn, &surface)
+            .unwrap_or_else(|| (String::new(), String::new()));
+
+        models::upsert_user_expression(&conn, &surface, &reading, &gloss)?;
+
+        // Re-detect MWE matches for all sentences
+        let user_expressions = models::list_user_expressions(&conn).unwrap_or_default();
+        if let Some(ref mut state) = self.reader_state {
+            state.mwe_matches = detect_all_mwe_matches(&conn, &state.sentences, &user_expressions);
+            // Rebuild sentences and re-apply
+            state.sentences = build_sentences(
+                &state.paragraphs,
+                &state.vocabulary_cache,
+                &state.gloss_cache,
+            );
+            for (idx, matches) in state.mwe_matches.iter().enumerate() {
+                if idx < state.sentences.len() {
+                    apply_mwe_matches(&mut state.sentences[idx].tokens, matches);
+                }
+            }
+            state.expression_mark = None;
+        }
+
+        self.set_message(format!("Expression saved: {}", surface));
+        Ok(())
+    }
 }
 
 /// Build SentenceData from paragraphs using sentence_index stored in DB tokens.
@@ -1661,6 +1857,10 @@ fn build_sentences(
                 conjugation_form: translate_conjugation_form(&db_tok.conjugation_form),
                 conjugation_type: translate_conjugation_type(&db_tok.conjugation_type),
                 is_trivial,
+                group_id: None,
+                is_group_head: false,
+                conjugation_desc: String::new(),
+                mwe_gloss: String::new(),
             });
         }
 
@@ -1680,7 +1880,166 @@ fn build_sentences(
         }
     }
 
+    // Apply conjugation grouping to each sentence
+    for sentence in &mut sentences {
+        apply_conjugation_groups(&mut sentence.tokens);
+    }
+
     sentences
+}
+
+/// Apply conjugation grouping to a sentence's tokens.
+/// Groups verb/adjective heads with following auxiliaries, assigns group IDs,
+/// propagates the head's vocabulary_status to group members, and sets
+/// the conjugation description on the head token.
+fn apply_conjugation_groups(tokens: &mut [TokenDisplay]) {
+    // Build lightweight GroupToken references for the grouping algorithm
+    let group_tokens: Vec<GroupToken> = tokens
+        .iter()
+        .map(|t| GroupToken {
+            pos: &t.pos,
+            base_form: &t.base_form,
+            conjugation_form: &t.conjugation_form,
+        })
+        .collect();
+
+    let groups = tokenizer::assign_conjugation_groups(&group_tokens);
+
+    for group in &groups {
+        let head_status = tokens[group.head_index].vocabulary_status;
+
+        for &idx in &group.member_indices {
+            tokens[idx].group_id = Some(group.group_id);
+            // Propagate head's vocabulary status to all group members
+            tokens[idx].vocabulary_status = head_status;
+            // Clear is_trivial so the renderer highlights group members
+            // (auxiliaries like ない, ます, た are normally trivial, but when
+            // part of a conjugation group they should highlight with the head)
+            tokens[idx].is_trivial = false;
+        }
+
+        // Mark head and set description
+        tokens[group.head_index].is_group_head = true;
+        tokens[group.head_index].conjugation_desc = group.description.clone();
+    }
+}
+
+/// Detect MWE matches across all sentences using JMdict and user expressions.
+/// Returns a Vec with one Vec<MweMatch> per sentence.
+fn detect_all_mwe_matches(
+    conn: &rusqlite::Connection,
+    sentences: &[SentenceData],
+    user_expressions: &[models::UserExpression],
+) -> Vec<Vec<MweMatch>> {
+    let max_window = 12; // Max tokens to combine in a sliding window
+
+    sentences
+        .iter()
+        .map(|sentence| detect_sentence_mwes(conn, &sentence.tokens, user_expressions, max_window))
+        .collect()
+}
+
+/// Detect MWE matches in a single sentence using a sliding window.
+/// User expressions take priority over JMdict matches.
+fn detect_sentence_mwes(
+    conn: &rusqlite::Connection,
+    tokens: &[TokenDisplay],
+    user_expressions: &[models::UserExpression],
+    max_window: usize,
+) -> Vec<MweMatch> {
+    let mut matches: Vec<MweMatch> = Vec::new();
+    let mut i = 0;
+
+    while i < tokens.len() {
+        let mut best_match: Option<MweMatch> = None;
+        let mut combined = String::new();
+
+        let end = tokens.len().min(i + max_window);
+        for j in i..end {
+            combined.push_str(&tokens[j].surface);
+
+            // Skip single-token matches (already handled by normal vocabulary)
+            if j <= i {
+                continue;
+            }
+
+            // Check user expressions first (highest priority)
+            if let Some(ue) = user_expressions.iter().find(|ue| ue.surface == combined) {
+                best_match = Some(MweMatch {
+                    start: i,
+                    end: j + 1,
+                    surface: combined.clone(),
+                    reading: ue.reading.clone(),
+                    gloss: ue.gloss.clone(),
+                });
+                continue; // keep looking for longer matches
+            }
+
+            // Check JMdict
+            if dictionary::has_jmdict_kanji_entry(conn, &combined) {
+                if let Some((reading, gloss)) = dictionary::lookup_mwe_info(conn, &combined) {
+                    best_match = Some(MweMatch {
+                        start: i,
+                        end: j + 1,
+                        surface: combined.clone(),
+                        reading,
+                        gloss,
+                    });
+                    // keep looking for longer matches (greedy)
+                }
+            }
+        }
+
+        if let Some(m) = best_match {
+            let skip_to = m.end;
+            matches.push(m);
+            i = skip_to; // advance past the match
+        } else {
+            i += 1;
+        }
+    }
+
+    matches
+}
+
+/// Apply MWE matches to tokens in a sentence.
+/// MWE groups override conjugation groups for overlapping tokens.
+/// The group_id space for MWEs starts at 10000 to avoid collisions with
+/// conjugation group IDs.
+fn apply_mwe_matches(tokens: &mut [TokenDisplay], matches: &[MweMatch]) {
+    for (match_idx, m) in matches.iter().enumerate() {
+        let mwe_group_id = 10000 + match_idx;
+
+        // Find the first non-trivial token in the match to be the head
+        let head_idx = (m.start..m.end)
+            .find(|&idx| !tokens[idx].is_trivial)
+            .unwrap_or(m.start);
+
+        // Get the head's vocabulary status to propagate to all members
+        let head_status = tokens[head_idx].vocabulary_status;
+
+        for idx in m.start..m.end {
+            if idx >= tokens.len() {
+                break;
+            }
+            // Override any existing conjugation group assignment
+            tokens[idx].group_id = Some(mwe_group_id);
+            tokens[idx].is_group_head = idx == head_idx;
+            tokens[idx].conjugation_desc = String::new();
+            tokens[idx].mwe_gloss = m.gloss.clone();
+            // Propagate head's vocabulary status so all members highlight uniformly
+            // (particles like の, も normally have Ignored status → DarkGray,
+            // but inside an MWE they should match the head's highlight color)
+            tokens[idx].vocabulary_status = head_status;
+            // Clear is_trivial so the renderer uses status_style() for coloring
+            tokens[idx].is_trivial = false;
+        }
+
+        // Set the head's description
+        if head_idx < tokens.len() {
+            tokens[head_idx].conjugation_desc = format!("expression");
+        }
+    }
 }
 
 /// Check if a POS tag represents a trivial token (not worth tracking as vocabulary).
