@@ -5,6 +5,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
@@ -119,6 +120,30 @@ fn decompress_gz(gz_path: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Parse DTD entity definitions from XML content.
+/// Extracts `<!ENTITY name "value">` declarations and returns a HashMap.
+/// JMdict uses ~267 custom entities for POS tags, field codes, etc.
+fn parse_dtd_entities(content: &str) -> HashMap<String, String> {
+    let mut entities = HashMap::new();
+    // Match: <!ENTITY name "value">
+    // Entity names can contain letters, digits, hyphens, dots, underscores.
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("<!ENTITY ") {
+            // Parse: name "value">
+            if let Some(quote_start) = rest.find('"') {
+                let name = rest[..quote_start].trim();
+                let after_quote = &rest[quote_start + 1..];
+                if let Some(quote_end) = after_quote.find('"') {
+                    let value = &after_quote[..quote_end];
+                    entities.insert(name.to_string(), value.to_string());
+                }
+            }
+        }
+    }
+    entities
+}
+
 /// Import JMdict XML file into the database.
 pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
     // ~200k entries typical for JMdict_e
@@ -133,6 +158,10 @@ pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
 
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read JMdict file: {}", path.display()))?;
+
+    // Parse DTD entity definitions (e.g. <!ENTITY n "noun (common) (futsuumeishi)">)
+    // so we can resolve entity references like &n; in POS tags.
+    let entities = parse_dtd_entities(&content);
 
     let mut reader = Reader::from_str(&content);
     reader.trim_text(true);
@@ -204,7 +233,10 @@ pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
                 current_element.clear();
             }
             Ok(Event::Text(ref e)) => {
-                buf_text = e.unescape().unwrap_or_default().to_string();
+                buf_text = e
+                    .unescape_with(|ent| entities.get(ent).map(|s| s.as_str()))
+                    .unwrap_or_default()
+                    .to_string();
 
                 if let Some(ref mut builder) = current_entry {
                     match current_element.as_str() {
@@ -498,5 +530,21 @@ mod tests {
             ],
         };
         assert_eq!(entry.short_gloss(), "first meaning");
+    }
+
+    #[test]
+    fn test_parse_dtd_entities() {
+        let xml = r#"<?xml version="1.0"?>
+<!DOCTYPE JMdict [
+<!ENTITY n "noun (common) (futsuumeishi)">
+<!ENTITY v1 "Ichidan verb">
+<!ENTITY adj-i "adjective (keiyoushi)">
+]>
+<JMdict></JMdict>"#;
+        let entities = parse_dtd_entities(xml);
+        assert_eq!(entities.get("n").unwrap(), "noun (common) (futsuumeishi)");
+        assert_eq!(entities.get("v1").unwrap(), "Ichidan verb");
+        assert_eq!(entities.get("adj-i").unwrap(), "adjective (keiyoushi)");
+        assert_eq!(entities.len(), 3);
     }
 }

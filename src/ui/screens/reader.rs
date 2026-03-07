@@ -112,7 +112,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         readings_indicator,
         known_indicator,
         Span::styled(
-            " ↑↓:sentence ←→:word 1-5:status i:ignore Enter:detail m:expr ",
+            " ↑↓:sentence ←→:word 1-5:status i:ignore Enter:detail c:copy m:expr ",
             Style::default().fg(Color::DarkGray),
         ),
     ]);

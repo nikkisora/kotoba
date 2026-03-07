@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -41,7 +41,7 @@ pub enum PopupState {
         scroll: usize,
     },
     /// Help overlay showing keybindings.
-    Help,
+    Help { scroll: usize },
     /// Note editor for a word.
     NoteEditor { vocabulary_id: i64, text: String },
     /// Quit confirmation.
@@ -60,6 +60,13 @@ pub enum PopupState {
     FilePathInput { text: String },
     /// Syosetu ncode input.
     SyosetuInput { text: String },
+    /// Translation input for a newly created expression.
+    /// Shown after the user marks an expression and presses Enter.
+    ExpressionTranslation {
+        surface: String,
+        reading: String,
+        gloss: String,
+    },
 }
 
 /// A token as displayed in the reader.
@@ -382,6 +389,9 @@ pub struct App {
     pub pending_open_chapter: Option<i64>,
     /// Labels of text imports currently running in the background.
     pub pending_imports: Vec<String>,
+    /// Persistent clipboard handle — kept alive so Linux clipboard managers
+    /// can read the content before it disappears.
+    pub clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
@@ -405,6 +415,7 @@ impl App {
             tick_count: 0,
             pending_open_chapter: None,
             pending_imports: Vec::new(),
+            clipboard: arboard::Clipboard::new().ok(),
         }
     }
 
@@ -1730,11 +1741,10 @@ impl App {
         Ok(())
     }
 
-    /// Save the currently marked expression range as a user expression.
-    /// Concatenates token surfaces from start..=end, saves to DB,
-    /// and re-detects MWE matches.
+    /// Begin saving an expression: capture the marked range, look up JMdict,
+    /// then open the translation prompt popup so the user can confirm/edit the gloss.
     pub fn save_expression_mark(&mut self) -> Result<()> {
-        let (surface, sent_idx) = {
+        let surface = {
             let state = match self.reader_state.as_ref() {
                 Some(s) => s,
                 None => return Ok(()),
@@ -1744,11 +1754,10 @@ impl App {
                 None => return Ok(()),
             };
             let sentence = &state.sentences[state.sentence_index];
-            let surface: String = sentence.tokens[start..=end]
+            sentence.tokens[start..=end]
                 .iter()
                 .map(|t| t.surface.as_str())
-                .collect();
-            (surface, state.sentence_index)
+                .collect::<String>()
         };
 
         if surface.is_empty() {
@@ -1759,12 +1768,42 @@ impl App {
             return Ok(());
         }
 
+        // Clear expression mark immediately (visual range highlighting)
+        if let Some(ref mut state) = self.reader_state {
+            state.expression_mark = None;
+        }
+
         let conn = self.open_db()?;
 
-        // Look up gloss from JMdict if available
+        // Look up gloss from JMdict if available — pre-fill for the user
         let (reading, gloss) = dictionary::lookup_mwe_info(&conn, &surface)
             .unwrap_or_else(|| (String::new(), String::new()));
 
+        // Open translation prompt popup instead of saving immediately
+        self.popup = Some(PopupState::ExpressionTranslation {
+            surface,
+            reading,
+            gloss,
+        });
+
+        Ok(())
+    }
+
+    /// Save a user expression that was confirmed via the translation prompt popup.
+    /// Called when the user presses Enter in the ExpressionTranslation popup.
+    pub fn save_expression_with_translation(&mut self) -> Result<()> {
+        let (surface, reading, gloss) = match self.popup {
+            Some(PopupState::ExpressionTranslation {
+                ref surface,
+                ref reading,
+                ref gloss,
+                ..
+            }) => (surface.clone(), reading.clone(), gloss.clone()),
+            _ => return Ok(()),
+        };
+        self.popup = None;
+
+        let conn = self.open_db()?;
         models::upsert_user_expression(&conn, &surface, &reading, &gloss)?;
 
         // Re-detect MWE matches for all sentences
@@ -1782,10 +1821,76 @@ impl App {
                     apply_mwe_matches(&mut state.sentences[idx].tokens, matches);
                 }
             }
-            state.expression_mark = None;
         }
 
         self.set_message(format!("Expression saved: {}", surface));
+        Ok(())
+    }
+
+    /// Copy the currently selected word (or its group surface) to the system clipboard.
+    pub fn copy_word_to_clipboard(&mut self) -> Result<()> {
+        let text = {
+            let state = match self.reader_state.as_ref() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            let wi = match state.word_index {
+                Some(i) => i,
+                None => {
+                    self.set_message("Select a word first (←/→), then press 'c' to copy");
+                    return Ok(());
+                }
+            };
+            let sentence = &state.sentences[state.sentence_index];
+            if wi >= sentence.tokens.len() {
+                return Ok(());
+            }
+            let token = &sentence.tokens[wi];
+            // If this token belongs to a group (conjugation or MWE), copy the whole group surface.
+            if let Some(gid) = token.group_id {
+                sentence
+                    .tokens
+                    .iter()
+                    .filter(|t| t.group_id == Some(gid))
+                    .map(|t| t.surface.as_str())
+                    .collect::<String>()
+            } else {
+                token.surface.clone()
+            }
+        };
+
+        self.set_clipboard(&text)?;
+        self.set_message(format!("Copied: {}", text));
+        Ok(())
+    }
+
+    /// Copy the full current sentence text to the system clipboard.
+    pub fn copy_sentence_to_clipboard(&mut self) -> Result<()> {
+        let text = {
+            let state = match self.reader_state.as_ref() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            if state.sentences.is_empty() {
+                return Ok(());
+            }
+            let sentence = &state.sentences[state.sentence_index];
+            sentence
+                .tokens
+                .iter()
+                .map(|t| t.surface.as_str())
+                .collect::<String>()
+        };
+
+        self.set_clipboard(&text)?;
+        self.set_message(format!("Copied sentence: {}", text));
+        Ok(())
+    }
+
+    /// Write text to the system clipboard using the persistent handle.
+    fn set_clipboard(&mut self, text: &str) -> Result<()> {
+        let cb = self.clipboard.as_mut().context("Clipboard not available")?;
+        cb.set_text(text).context("Failed to write to clipboard")?;
         Ok(())
     }
 }

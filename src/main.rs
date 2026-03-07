@@ -337,7 +337,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             return;
         }
         KeyCode::Char('?') => {
-            app.popup = Some(PopupState::Help);
+            app.popup = Some(PopupState::Help { scroll: 0 });
             return;
         }
         _ => {}
@@ -431,8 +431,18 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             }
             _ => {}
         },
-        PopupState::Help => match key.code {
+        PopupState::Help { .. } => match key.code {
             KeyCode::Esc | KeyCode::Char('?') => app.popup = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(PopupState::Help { ref mut scroll }) = app.popup {
+                    *scroll = scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(PopupState::Help { ref mut scroll }) = app.popup {
+                    *scroll = scroll.saturating_add(1);
+                }
+            }
             _ => {}
         },
         PopupState::NoteEditor { .. } => match key.code {
@@ -631,6 +641,28 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             KeyCode::Char(c) => {
                 if let Some(PopupState::SyosetuInput { ref mut text }) = app.popup {
                     text.push(c);
+                }
+            }
+            _ => {}
+        },
+        PopupState::ExpressionTranslation { .. } => match key.code {
+            KeyCode::Esc => {
+                app.popup = None;
+                app.set_message("Expression cancelled");
+            }
+            KeyCode::Enter => {
+                if let Err(e) = app.save_expression_with_translation() {
+                    app.set_message(format!("Error saving expression: {}", e));
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(PopupState::ExpressionTranslation { ref mut gloss, .. }) = app.popup {
+                    gloss.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(PopupState::ExpressionTranslation { ref mut gloss, .. }) = app.popup {
+                    gloss.push(c);
                 }
             }
             _ => {}
@@ -1241,6 +1273,20 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Err(e) = app.undo_last_autopromote() {
                 app.set_message(format!("Undo error: {}", e));
+            }
+        }
+
+        // Copy selected word to clipboard
+        KeyCode::Char('c') => {
+            if let Err(e) = app.copy_word_to_clipboard() {
+                app.set_message(format!("Copy failed: {}", e));
+            }
+        }
+
+        // Copy current sentence to clipboard
+        KeyCode::Char('C') => {
+            if let Err(e) = app.copy_sentence_to_clipboard() {
+                app.set_message(format!("Copy failed: {}", e));
             }
         }
 

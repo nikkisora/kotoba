@@ -55,10 +55,16 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                     )));
 
                     for (i, sense) in entry.senses.iter().enumerate() {
-                        let pos = if sense.pos.is_empty() {
+                        let pos_tags: Vec<&str> = sense
+                            .pos
+                            .iter()
+                            .map(|s| s.as_str())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        let pos = if pos_tags.is_empty() {
                             String::new()
                         } else {
-                            format!("[{}] ", sense.pos.join(", "))
+                            format!("[{}] ", pos_tags.join(", "))
                         };
                         let glosses = sense.glosses.join("; ");
                         lines.push(Line::from(format!("  {}. {}{}", i + 1, pos, glosses)));
@@ -118,69 +124,126 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             frame.render_widget(paragraph, area);
         }
 
-        PopupState::Help => {
-            let area = centered_rect(60, 70, frame.size());
+        PopupState::Help { scroll } => {
+            let area = centered_rect(65, 85, frame.size());
             frame.render_widget(Clear, padded_rect(area, frame.size()));
+
+            let heading = Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD);
 
             let lines = vec![
                 Line::from(Span::styled(
-                    "Keybindings",
+                    "Keybindings & Commands",
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(
-                    "Global:",
-                    Style::default().add_modifier(Modifier::BOLD),
-                )),
-                Line::from("  q / Ctrl+C - Quit"),
-                Line::from("  Tab        - Cycle screens"),
-                Line::from("  ?          - Toggle this help"),
+                // ── CLI Commands ──
+                Line::from(Span::styled("CLI Commands:", heading)),
+                Line::from("  kotoba run                   Launch the TUI"),
+                Line::from("  kotoba setup-dict            Download & set up JMdict"),
+                Line::from("  kotoba import-dict <path>    Import JMdict XML manually"),
+                Line::from("  kotoba import <file>         Import .txt/.srt/.ass/.epub"),
+                Line::from("  kotoba import --clipboard    Import from clipboard"),
+                Line::from("  kotoba import --url <URL>    Import from a web URL"),
+                Line::from("  kotoba syosetu <ncode>       Import Syosetu novel"),
+                Line::from("  kotoba syosetu <ncode> -c N  Import specific chapter"),
+                Line::from("  kotoba dict <word>           Look up a word in JMdict"),
+                Line::from("  kotoba tokenize <text>       Tokenize Japanese text"),
+                Line::from(""),
+                // ── Global ──
+                Line::from(Span::styled("Global:", heading)),
+                Line::from("  q / Ctrl+C   Quit"),
+                Line::from("  Tab          Toggle Reader <-> previous screen"),
+                Line::from("  ?            Toggle this help"),
+                Line::from(""),
+                // ── Home ──
+                Line::from(Span::styled("Home:", heading)),
+                Line::from("  Up/k Down/j  Navigate recent texts"),
+                Line::from("  Enter        Open selected text in Reader"),
+                Line::from("  l            Go to Library"),
+                Line::from("  r            Go to Review"),
+                Line::from("  i            Import menu"),
+                Line::from("  f            Toggle show finished texts"),
+                Line::from(""),
+                // ── Library ──
+                Line::from(Span::styled("Library:", heading)),
+                Line::from("  Up/k Down/j  Navigate texts"),
+                Line::from("  Enter        Open text / chapter select"),
+                Line::from("  d            Delete selected text"),
+                Line::from("  i            Import menu"),
+                Line::from("  /            Search texts by title"),
+                Line::from("  s            Cycle sort mode"),
+                Line::from("  f            Cycle source type filter"),
+                Line::from("  Esc          Back to Home"),
+                Line::from(""),
+                // ── Chapter Select ──
+                Line::from(Span::styled("Chapter Select:", heading)),
+                Line::from("  Up/k Down/j  Navigate chapters"),
+                Line::from("  n / PgDn     Next page"),
+                Line::from("  p / PgUp     Previous page"),
+                Line::from("  Enter        Open selected chapter"),
+                Line::from("  x            Toggle skip/unskip chapter"),
+                Line::from("  P            Preprocess upcoming chapters"),
+                Line::from("  Esc          Back to Library"),
+                Line::from(""),
+                // ── Reader ──
+                Line::from(Span::styled("Reader:", heading)),
+                Line::from("  Up/k Down/j  Previous / next sentence"),
+                Line::from("  Left/h       Previous word"),
+                Line::from("  Right/l      Next word"),
+                Line::from("  1-4          Set Learning status 1-4"),
+                Line::from("  5            Set Known"),
+                Line::from("  i            Set Ignored"),
+                Line::from("  Enter        Word detail (dictionary lookup)"),
+                Line::from("  n            Edit word note"),
+                Line::from("  c            Copy selected word to clipboard"),
+                Line::from("  C            Copy current sentence to clipboard"),
+                Line::from("  m            Mark expression (MWE mode)"),
+                Line::from("  w            Toggle Known/Ignored in sidebar"),
+                Line::from("  r            Toggle all readings in sidebar"),
+                Line::from("  a            Toggle autopromotion"),
+                Line::from("  Ctrl+Z       Undo last autopromotion"),
+                Line::from("  Esc          Deselect word / back"),
+                Line::from(""),
+                // ── Expression Marking ──
+                Line::from(Span::styled("Expression Marking (after m):", heading)),
+                Line::from("  Left/h       Extend selection left"),
+                Line::from("  Right/l      Extend selection right"),
+                Line::from("  Enter        Save expression"),
+                Line::from("  Esc          Cancel"),
+                Line::from(""),
+                // ── Import Menu ──
+                Line::from(Span::styled("Import Menu:", heading)),
+                Line::from("  c            Import from clipboard"),
+                Line::from("  u            Import from URL"),
+                Line::from("  f            Import from file"),
+                Line::from("  s            Import from Syosetu"),
+                Line::from("  Esc          Cancel"),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Reader:",
-                    Style::default().add_modifier(Modifier::BOLD),
-                )),
-                Line::from("  Up/k       - Previous sentence"),
-                Line::from("  Down/j     - Next sentence"),
-                Line::from("  Left/h     - Previous word"),
-                Line::from("  Right/l    - Next word"),
-                Line::from("  1-4        - Set Learning status 1-4"),
-                Line::from("  5          - Set Known status"),
-                Line::from("  i          - Set Ignored status"),
-                Line::from("  Enter      - Word detail popup"),
-                Line::from("  n          - Edit word note"),
-                Line::from("  w          - Toggle Known/Ignored words in sidebar"),
-                Line::from("  r          - Toggle all readings in sidebar"),
-                Line::from("  a          - Toggle autopromotion on/off"),
-                Line::from("  Ctrl+Z     - Undo last autopromotion"),
-                Line::from("  Esc        - Deselect word / back"),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Library:",
-                    Style::default().add_modifier(Modifier::BOLD),
-                )),
-                Line::from("  Up/Down    - Navigate texts"),
-                Line::from("  Enter      - Open text in Reader"),
-                Line::from("  d          - Delete selected text"),
-                Line::from("  i          - Import (clipboard/URL/file)"),
-                Line::from("  /          - Search texts by title"),
-                Line::from("  s          - Cycle sort mode"),
-                Line::from("  f          - Cycle source filter"),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Press Esc or ? to close",
+                    "↑/↓ to scroll • Esc or ? to close",
                     Style::default().fg(Color::DarkGray),
                 )),
             ];
 
             let block = Block::default()
-                .title(" Help ")
+                .title(Span::styled(
+                    " Help ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Blue));
 
-            let paragraph = Paragraph::new(lines).block(block);
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false })
+                .scroll((*scroll as u16, 0));
+
             frame.render_widget(paragraph, area);
         }
 
@@ -415,6 +478,58 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
 
             let block = Block::default()
                 .title(" Syosetu Import ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+
+        PopupState::ExpressionTranslation {
+            surface,
+            reading,
+            gloss,
+        } => {
+            let area = centered_rect(55, 35, frame.size());
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
+
+            let mut lines: Vec<Line> = Vec::new();
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "Expression: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(surface.as_str(), Style::default().fg(Color::Cyan)),
+            ]));
+            if !reading.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("Reading:    ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(reading.as_str(), Style::default().fg(Color::Green)),
+                ]));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Translation:",
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("▎{}_", gloss),
+                Style::default().fg(Color::Cyan),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Type to edit • Enter to save • Esc to cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            let block = Block::default()
+                .title(Span::styled(
+                    " Expression Translation ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Green));
 
