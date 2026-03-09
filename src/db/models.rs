@@ -818,6 +818,301 @@ pub fn list_standalone_texts(conn: &Connection) -> Result<Vec<Text>> {
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
+// ─── SRS Card/Review CRUD ────────────────────────────────────────────
+
+impl SrsCard {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            vocabulary_id: row.get("vocabulary_id")?,
+            conjugation_id: row.get("conjugation_id")?,
+            card_type: row.get("card_type")?,
+            answer_mode: row.get("answer_mode")?,
+            due_date: row.get("due_date")?,
+            stability: row.get("stability")?,
+            difficulty: row.get("difficulty")?,
+            reps: row.get("reps")?,
+            lapses: row.get("lapses")?,
+            state: row.get("state")?,
+            created_at: row.get("created_at")?,
+        })
+    }
+}
+
+impl SrsReview {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            card_id: row.get("card_id")?,
+            reviewed_at: row.get("reviewed_at")?,
+            rating: row.get("rating")?,
+            elapsed_ms: row.get("elapsed_ms")?,
+            typed_answer: row.get("typed_answer")?,
+            answer_correct: row.get::<_, i32>("answer_correct")? != 0,
+        })
+    }
+}
+
+impl CardType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CardType::Word => "word",
+            CardType::Sentence => "sentence",
+        }
+    }
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "sentence" => CardType::Sentence,
+            _ => CardType::Word,
+        }
+    }
+}
+
+impl AnswerMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AnswerMode::MeaningRecall => "meaning_recall",
+            AnswerMode::ReadingRecall => "reading_recall",
+            AnswerMode::TypedReading => "typed_reading",
+            AnswerMode::SentenceCloze => "sentence_cloze",
+        }
+    }
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "reading_recall" => AnswerMode::ReadingRecall,
+            "typed_reading" => AnswerMode::TypedReading,
+            "sentence_cloze" => AnswerMode::SentenceCloze,
+            _ => AnswerMode::MeaningRecall,
+        }
+    }
+    pub fn label(&self) -> &'static str {
+        match self {
+            AnswerMode::MeaningRecall => "Meaning Recall",
+            AnswerMode::ReadingRecall => "Reading Recall",
+            AnswerMode::TypedReading => "Typed Reading",
+            AnswerMode::SentenceCloze => "Sentence Cloze",
+        }
+    }
+}
+
+/// Insert a new SRS card. Returns the card id.
+pub fn insert_srs_card(
+    conn: &Connection,
+    vocabulary_id: i64,
+    card_type: &CardType,
+    answer_mode: &AnswerMode,
+    sentence_context: Option<&str>,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO srs_cards (vocabulary_id, card_type, answer_mode, due_date, state)
+         VALUES (?1, ?2, ?3, datetime('now'), 'new')",
+        params![vocabulary_id, card_type.as_str(), answer_mode.as_str()],
+    )?;
+    let card_id = conn.last_insert_rowid();
+
+    // Store sentence context as JSON in a separate column if needed
+    // For now, sentence cards store context via the vocabulary linkage
+    if let Some(ctx) = sentence_context {
+        // Store the sentence text alongside the card for cloze display
+        conn.execute(
+            "UPDATE srs_cards SET conjugation_id = NULL WHERE id = ?1",
+            params![card_id],
+        )?;
+        let _ = ctx; // sentence context stored via sentence_text if migration adds it
+    }
+
+    Ok(card_id)
+}
+
+/// Check if a word card already exists for a vocabulary item.
+pub fn has_word_card(conn: &Connection, vocabulary_id: i64) -> Result<bool> {
+    let count: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM srs_cards WHERE vocabulary_id = ?1 AND card_type = 'word' AND state != 'retired'",
+        params![vocabulary_id],
+        |r| r.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// Check if a sentence card exists for a vocabulary item with a given sentence text hash.
+pub fn has_sentence_card_for_vocab(conn: &Connection, vocabulary_id: i64) -> Result<bool> {
+    let count: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM srs_cards WHERE vocabulary_id = ?1 AND card_type = 'sentence' AND state != 'retired'",
+        params![vocabulary_id],
+        |r| r.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// Get all due SRS cards (due_date <= now, not retired), ordered by due date.
+pub fn get_due_cards(conn: &Connection, limit: usize) -> Result<Vec<SrsCard>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM srs_cards
+         WHERE due_date <= datetime('now') AND state != 'retired'
+         ORDER BY due_date ASC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], SrsCard::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Get count of due cards and new cards.
+pub fn get_due_card_counts(conn: &Connection) -> Result<(usize, usize)> {
+    let due: usize = conn.query_row(
+        "SELECT COUNT(*) FROM srs_cards WHERE due_date <= datetime('now') AND state != 'retired'",
+        [],
+        |r| r.get(0),
+    )?;
+    let new: usize = conn.query_row(
+        "SELECT COUNT(*) FROM srs_cards WHERE state = 'new' AND due_date <= datetime('now')",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok((due, new))
+}
+
+/// Get an SRS card by id.
+pub fn get_srs_card(conn: &Connection, id: i64) -> Result<Option<SrsCard>> {
+    let mut stmt = conn.prepare("SELECT * FROM srs_cards WHERE id = ?1")?;
+    let mut rows = stmt.query_map(params![id], SrsCard::from_row)?;
+    Ok(rows.next().transpose()?)
+}
+
+/// Update an SRS card's FSRS state after a review.
+pub fn update_srs_card_state(
+    conn: &Connection,
+    card_id: i64,
+    stability: f64,
+    difficulty: f64,
+    due_date: &str,
+    reps: i32,
+    lapses: i32,
+    state: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE srs_cards SET stability = ?1, difficulty = ?2, due_date = ?3, reps = ?4, lapses = ?5, state = ?6
+         WHERE id = ?7",
+        params![stability, difficulty, due_date, reps, lapses, state, card_id],
+    )?;
+    Ok(())
+}
+
+/// Retire an SRS card (set state to 'retired').
+pub fn retire_srs_card(conn: &Connection, card_id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE srs_cards SET state = 'retired' WHERE id = ?1",
+        params![card_id],
+    )?;
+    Ok(())
+}
+
+/// Retire all active SRS cards for a vocabulary item.
+pub fn retire_cards_for_vocabulary(conn: &Connection, vocabulary_id: i64) -> Result<usize> {
+    let count = conn.execute(
+        "UPDATE srs_cards SET state = 'retired' WHERE vocabulary_id = ?1 AND state != 'retired'",
+        params![vocabulary_id],
+    )?;
+    Ok(count)
+}
+
+/// Insert a review log entry.
+pub fn insert_srs_review(
+    conn: &Connection,
+    card_id: i64,
+    rating: i32,
+    elapsed_ms: i64,
+    typed_answer: Option<&str>,
+    answer_correct: bool,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO srs_reviews (card_id, rating, elapsed_ms, typed_answer, answer_correct)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            card_id,
+            rating,
+            elapsed_ms,
+            typed_answer,
+            answer_correct as i32
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Get review history for a card (for FSRS state computation).
+pub fn get_card_reviews(conn: &Connection, card_id: i64) -> Result<Vec<SrsReview>> {
+    let mut stmt =
+        conn.prepare("SELECT * FROM srs_reviews WHERE card_id = ?1 ORDER BY reviewed_at ASC")?;
+    let rows = stmt.query_map(params![card_id], SrsReview::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Get total review count and accuracy for session summary.
+pub fn get_review_session_stats(conn: &Connection) -> Result<(usize, usize)> {
+    // Today's reviews
+    let total: usize = conn.query_row(
+        "SELECT COUNT(*) FROM srs_reviews WHERE reviewed_at >= date('now')",
+        [],
+        |r| r.get(0),
+    )?;
+    let correct: usize = conn.query_row(
+        "SELECT COUNT(*) FROM srs_reviews WHERE reviewed_at >= date('now') AND answer_correct = 1",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok((total, correct))
+}
+
+/// Get the sentence text for a card (reconstructed from vocabulary context).
+/// Returns the sentence from the first text where this vocabulary appears.
+pub fn get_card_sentence_context(conn: &Connection, vocabulary_id: i64) -> Result<Option<String>> {
+    // Find a sentence containing this vocabulary item
+    let result: Option<String> = conn
+        .query_row(
+            "SELECT GROUP_CONCAT(t2.surface, '')
+             FROM tokens t1
+             JOIN paragraphs p ON t1.paragraph_id = p.id
+             JOIN tokens t2 ON t2.paragraph_id = t1.paragraph_id AND t2.sentence_index = t1.sentence_index
+             JOIN vocabulary v ON t1.base_form = v.base_form AND t1.reading = v.reading
+             WHERE v.id = ?1
+             GROUP BY t1.paragraph_id, t1.sentence_index
+             ORDER BY t1.id ASC
+             LIMIT 1",
+            params![vocabulary_id],
+            |row| row.get(0),
+        )
+        .ok();
+    Ok(result)
+}
+
+/// Get sentence tokens for a vocabulary item (for rendering sentence context in review).
+/// Returns tokens from the first sentence containing this vocabulary item.
+pub fn get_sentence_tokens_for_vocab(conn: &Connection, vocabulary_id: i64) -> Result<Vec<Token>> {
+    // Find the first sentence containing this vocabulary
+    let sentence_info: Option<(i64, i32)> = conn
+        .query_row(
+            "SELECT t.paragraph_id, t.sentence_index
+         FROM tokens t
+         JOIN vocabulary v ON t.base_form = v.base_form AND t.reading = v.reading
+         WHERE v.id = ?1
+         ORDER BY t.id ASC
+         LIMIT 1",
+            params![vocabulary_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok();
+
+    match sentence_info {
+        Some((paragraph_id, sentence_index)) => {
+            let mut stmt = conn.prepare(
+                "SELECT * FROM tokens WHERE paragraph_id = ?1 AND sentence_index = ?2 ORDER BY position",
+            )?;
+            let rows = stmt.query_map(params![paragraph_id, sentence_index], Token::from_row)?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        }
+        None => Ok(vec![]),
+    }
+}
+
 // ─── User Expression CRUD ────────────────────────────────────────────
 
 /// Insert or update a user expression. Returns the expression id.

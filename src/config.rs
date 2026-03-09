@@ -42,6 +42,9 @@ pub struct SrsConfig {
     pub new_cards_per_day: u32,
     #[serde(default)]
     pub max_reviews_per_session: u32,
+    /// Review order: "due_first" (default) or "random".
+    #[serde(default = "default_review_order")]
+    pub review_order: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +77,9 @@ fn default_answer_mode() -> String {
 fn default_new_cards() -> u32 {
     20
 }
+fn default_review_order() -> String {
+    "due_first".into()
+}
 fn default_llm_endpoint() -> String {
     "https://api.openai.com/v1".into()
 }
@@ -98,8 +104,9 @@ impl Default for SrsConfig {
     fn default() -> Self {
         Self {
             default_answer_mode: default_answer_mode(),
-            new_cards_per_day: default_new_cards(),
+            new_cards_per_day: 20,
             max_reviews_per_session: 0,
+            review_order: default_review_order(),
         }
     }
 }

@@ -28,7 +28,22 @@ pub fn render(frame: &mut Frame, app: &App) {
     .split(area);
 
     // Title bar
-    let title = Line::from(vec![
+    let home = app.home_state.as_ref();
+    let due_counts = home.map(|h| h.due_card_counts).unwrap_or((0, 0));
+    let review_indicator = if due_counts.0 > 0 {
+        vec![
+            Span::raw("  "),
+            Span::styled(
+                format!("[r] {} due", due_counts.0),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
+    } else {
+        vec![]
+    };
+    let mut title_spans = vec![
         Span::styled(
             " kotoba",
             Style::default()
@@ -38,14 +53,15 @@ pub fn render(frame: &mut Frame, app: &App) {
         Span::raw(" — Home"),
         Span::raw("  "),
         Span::styled("[?]help", Style::default().fg(Color::DarkGray)),
-    ]);
+    ];
+    title_spans.extend(review_indicator);
+    let title = Line::from(title_spans);
     frame.render_widget(
         Paragraph::new(title).style(Style::default().bg(Color::Rgb(30, 30, 50))),
         outer[0],
     );
 
     // Content
-    let home = app.home_state.as_ref();
     let show_finished = home.map(|h| h.show_finished).unwrap_or(false);
     let selected = home.map(|h| h.selected).unwrap_or(0);
 
@@ -165,7 +181,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     // Status bar
     let status = Line::from(vec![Span::styled(
-        " ↑↓:navigate  Enter:open  f:toggle finished  l:library  i:import  Tab:reader  q:quit  ?:help ",
+        " ↑↓:navigate  Enter:open  r:review  f:toggle finished  l:library  i:import  Tab:reader  q:quit  ?:help ",
         Style::default().fg(Color::DarkGray),
     )]);
     frame.render_widget(

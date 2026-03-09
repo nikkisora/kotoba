@@ -17,9 +17,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Screen::Library => screens::library::render(frame, app),
         Screen::ChapterSelect { .. } => screens::chapter_select::render(frame, app),
         Screen::Reader => screens::reader::render(frame, app),
-        Screen::Review => {
-            screens::placeholder::render(frame, "Review", "SRS review mode — coming in Phase 4")
-        }
+        Screen::Review => screens::review::render(frame, app),
     }
 
     // Render popup overlay if any

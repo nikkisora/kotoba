@@ -18,7 +18,8 @@ use std::io::stdout;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use app::{App, PopupState, Screen};
+use app::{App, PopupState, ReviewPhase, Screen};
+use core::srs::Rating;
 use db::models::{self, VocabularyStatus};
 use ui::events::{Event, EventLoop};
 
@@ -351,7 +352,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             handle_chapter_select_key(app, key, sid);
         }
         Screen::Reader => handle_reader_key(app, key),
-        Screen::Review => {}
+        Screen::Review => handle_review_key(app, key),
     }
 }
 
@@ -728,7 +729,9 @@ fn handle_home_key(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Char('r') => {
-            app.screen = Screen::Review;
+            if let Err(e) = app.start_review_session() {
+                app.set_message(format!("Review error: {}", e));
+            }
         }
         KeyCode::Char('i') => {
             app.popup = Some(PopupState::ImportMenu);
@@ -1030,6 +1033,199 @@ fn handle_chapter_select_key(app: &mut App, key: KeyEvent, source_id: i64) {
             let _ = app.refresh_library();
         }
         _ => {}
+    }
+}
+
+fn handle_review_key(app: &mut App, key: KeyEvent) {
+    let phase = app
+        .review_state
+        .as_ref()
+        .map(|s| s.phase.clone())
+        .unwrap_or(ReviewPhase::SessionSummary);
+
+    match phase {
+        ReviewPhase::PreSession => match key.code {
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                app.begin_review();
+            }
+            KeyCode::Esc => {
+                app.review_state = None;
+                let target = app.previous_screen.take().unwrap_or(Screen::Home);
+                app.screen = target.clone();
+                match target {
+                    Screen::Home => {
+                        let _ = app.refresh_home();
+                    }
+                    Screen::Library => {
+                        let _ = app.refresh_library();
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        },
+        ReviewPhase::ShowFront => match key.code {
+            KeyCode::Char(' ') => {
+                app.reveal_answer();
+            }
+            KeyCode::Enter => {
+                // If a word is selected in sentence context, show dict entry; otherwise flip
+                let has_selection = app
+                    .review_state
+                    .as_ref()
+                    .map(|s| s.context_word_index.is_some())
+                    .unwrap_or(false);
+                if has_selection {
+                    if let Err(e) = app.open_review_word_detail() {
+                        app.set_message(format!("Error: {}", e));
+                    }
+                } else {
+                    app.reveal_answer();
+                }
+            }
+            KeyCode::Esc => {
+                app.review_state = None;
+                let target = app.previous_screen.take().unwrap_or(Screen::Home);
+                app.screen = target.clone();
+                match target {
+                    Screen::Home => {
+                        let _ = app.refresh_home();
+                    }
+                    Screen::Library => {
+                        let _ = app.refresh_library();
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if let Some(ref mut state) = app.review_state {
+                    state.context_word_index =
+                        Some(state.context_word_index.unwrap_or(0).saturating_sub(1));
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if let Some(ref mut state) = app.review_state {
+                    if let Some(card_data) = state.queue.get(state.current_index) {
+                        let max_idx = card_data.sentence_tokens.len().saturating_sub(1);
+                        state.context_word_index = Some(
+                            state
+                                .context_word_index
+                                .map(|i| (i + 1).min(max_idx))
+                                .unwrap_or(0),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        },
+        ReviewPhase::ShowBack | ReviewPhase::ShowResult => match key.code {
+            KeyCode::Char('1') => {
+                if let Err(e) = app.rate_card(Rating::Again) {
+                    app.set_message(format!("Rating error: {}", e));
+                }
+            }
+            KeyCode::Char('2') => {
+                if let Err(e) = app.rate_card(Rating::Hard) {
+                    app.set_message(format!("Rating error: {}", e));
+                }
+            }
+            KeyCode::Char('3') | KeyCode::Char(' ') => {
+                if let Err(e) = app.rate_card(Rating::Good) {
+                    app.set_message(format!("Rating error: {}", e));
+                }
+            }
+            KeyCode::Char('4') => {
+                if let Err(e) = app.rate_card(Rating::Easy) {
+                    app.set_message(format!("Rating error: {}", e));
+                }
+            }
+            KeyCode::Enter => {
+                // Accept auto-rating (for typed reading mode)
+                let rating = app.review_state.as_ref().and_then(|s| s.auto_rating);
+                if let Some(r) = rating {
+                    if let Err(e) = app.rate_card(r) {
+                        app.set_message(format!("Rating error: {}", e));
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                app.review_state = None;
+                let target = app.previous_screen.take().unwrap_or(Screen::Home);
+                app.screen = target.clone();
+                match target {
+                    Screen::Home => {
+                        let _ = app.refresh_home();
+                    }
+                    Screen::Library => {
+                        let _ = app.refresh_library();
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if let Some(ref mut state) = app.review_state {
+                    state.context_word_index =
+                        Some(state.context_word_index.unwrap_or(0).saturating_sub(1));
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if let Some(ref mut state) = app.review_state {
+                    if let Some(card_data) = state.queue.get(state.current_index) {
+                        let max = card_data.sentence_tokens.len().saturating_sub(1);
+                        state.context_word_index = Some(
+                            state
+                                .context_word_index
+                                .map(|i| (i + 1).min(max))
+                                .unwrap_or(0),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        },
+        ReviewPhase::TypingAnswer => match key.code {
+            KeyCode::Enter => {
+                app.submit_typed_answer();
+            }
+            KeyCode::Backspace => {
+                if let Some(ref mut state) = app.review_state {
+                    state.typed_input.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(ref mut state) = app.review_state {
+                    state.typed_input.push(c);
+                }
+            }
+            KeyCode::Esc => {
+                // Skip this card (reveal answer instead)
+                app.reveal_answer();
+            }
+            _ => {}
+        },
+        ReviewPhase::SessionSummary => match key.code {
+            KeyCode::Enter | KeyCode::Esc => {
+                app.review_state = None;
+                let target = app.previous_screen.take().unwrap_or(Screen::Home);
+                app.screen = target.clone();
+                match target {
+                    Screen::Home => {
+                        let _ = app.refresh_home();
+                    }
+                    Screen::Library => {
+                        let _ = app.refresh_library();
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Char('r') => {
+                // Continue with more reviews
+                if let Err(e) = app.start_review_session() {
+                    app.set_message(format!("Review error: {}", e));
+                }
+            }
+            _ => {}
+        },
     }
 }
 

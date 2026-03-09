@@ -5,8 +5,9 @@ use std::time::Instant;
 
 use crate::config::AppConfig;
 use crate::core::dictionary::{self, DictEntry};
+use crate::core::srs::{Rating, SrsEngine};
 use crate::core::tokenizer::{self, GroupToken};
-use crate::db::models::{self, TextStats, Vocabulary, VocabularyStatus};
+use crate::db::models::{self, AnswerMode, SrsCard, TextStats, Vocabulary, VocabularyStatus};
 
 /// Compute a reasonable page_size for chapter select based on terminal height.
 /// Layout: 1 title bar + 4 source info + 2 list borders + 1 status bar = 8 fixed rows.
@@ -363,6 +364,79 @@ pub struct HomeState {
     pub selected: usize,
     /// Whether to show finished texts in the recent list (default false).
     pub show_finished: bool,
+    /// Number of SRS cards due for review (due_total, due_new).
+    pub due_card_counts: (usize, usize),
+}
+
+/// Phase of the review card display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewPhase {
+    /// Showing the front of the card (question).
+    ShowFront,
+    /// Showing the back of the card (answer).
+    ShowBack,
+    /// User is typing an answer (typed reading mode).
+    TypingAnswer,
+    /// Showing result after typing (diff display).
+    ShowResult,
+    /// Session summary (all cards done).
+    SessionSummary,
+    /// Pre-session: showing card count and asking to start.
+    PreSession,
+}
+
+/// Data needed to display a review card.
+#[derive(Debug, Clone)]
+pub struct ReviewCardData {
+    /// The SRS card from DB.
+    pub card: SrsCard,
+    /// The vocabulary entry.
+    pub vocabulary: Vocabulary,
+    /// JMdict definitions for display.
+    pub definitions: Vec<DictEntry>,
+    /// Sentence context tokens (for coloring).
+    pub sentence_tokens: Vec<TokenDisplay>,
+    /// Sentence text.
+    pub sentence_text: String,
+    /// Answer mode for this card.
+    pub answer_mode: AnswerMode,
+    /// Full display surface (compound surface for groups, e.g. "食べられない").
+    /// Falls back to vocabulary.base_form for standalone words.
+    pub display_surface: String,
+    /// Full display reading for compounds (e.g. "たべられない").
+    /// Falls back to vocabulary.reading for standalone words.
+    pub display_reading: String,
+    /// Group ID of the target word in sentence_tokens (for cloze blanking).
+    pub target_group_id: Option<usize>,
+}
+
+/// Review screen state.
+pub struct ReviewState {
+    /// Queue of cards to review this session.
+    pub queue: Vec<ReviewCardData>,
+    /// Current position in the queue.
+    pub current_index: usize,
+    /// Current phase of card display.
+    pub phase: ReviewPhase,
+    /// User's typed input (for typed reading mode).
+    pub typed_input: String,
+    /// When the current card was shown (for elapsed time tracking).
+    pub card_shown_at: Instant,
+    /// Word index for navigating sentence context.
+    pub context_word_index: Option<usize>,
+    /// Session statistics.
+    pub total_reviewed: usize,
+    pub correct_count: usize,
+    /// Total due cards (before filtering/limiting).
+    pub total_due: usize,
+    /// Total new cards.
+    pub total_new: usize,
+    /// Vocabulary cache for sentence context rendering.
+    pub vocabulary_cache: HashMap<(String, String), Vocabulary>,
+    /// Auto-rating from typed answer comparison.
+    pub auto_rating: Option<Rating>,
+    /// Typed answer comparison result: (input, expected, is_correct).
+    pub typed_result: Option<(String, String, bool)>,
 }
 
 /// Central application state.
@@ -374,6 +448,8 @@ pub struct App {
     pub library_state: Option<LibraryState>,
     pub chapter_select_state: Option<ChapterSelectState>,
     pub home_state: Option<HomeState>,
+    pub review_state: Option<ReviewState>,
+    pub srs_engine: Option<SrsEngine>,
     pub background_importer: Option<crate::import::background::BackgroundImporter>,
     /// Set of chapter_ids currently being preprocessed (for UI spinners).
     pub preprocessing_chapters: std::collections::HashSet<i64>,
@@ -405,6 +481,8 @@ impl App {
             library_state: None,
             chapter_select_state: None,
             home_state: None,
+            review_state: None,
+            srs_engine: SrsEngine::new().ok(),
             background_importer: None,
             preprocessing_chapters: std::collections::HashSet::new(),
             preprocessing_progress: HashMap::new(),
@@ -683,6 +761,7 @@ impl App {
                 stats.insert(t.id, s);
             }
         }
+        let due_card_counts = models::get_due_card_counts(&conn).unwrap_or((0, 0));
         let prev = self.home_state.as_ref();
         let show_finished = prev.map(|s| s.show_finished).unwrap_or(false);
         let selected = prev
@@ -693,6 +772,7 @@ impl App {
             recent_stats: stats,
             selected,
             show_finished,
+            due_card_counts,
         });
         Ok(())
     }
@@ -1015,6 +1095,16 @@ impl App {
         let conn = self.open_db()?;
         let vid = models::upsert_vocabulary(&conn, &base_form, &reading, "")?;
         models::update_vocabulary_status(&conn, vid, status)?;
+
+        // Auto-create or retire SRS cards based on new status
+        if let Some(ref srs) = self.srs_engine {
+            if let Err(e) =
+                srs.on_status_change(&conn, vid, status, &self.config.srs.default_answer_mode)
+            {
+                // Log but don't fail — SRS is secondary to vocabulary tracking
+                self.set_message(format!("SRS card error: {}", e));
+            }
+        }
 
         // Update cache & patch affected tokens in-place (no full rebuild)
         if let Some(ref mut state) = self.reader_state {
@@ -1893,6 +1983,402 @@ impl App {
         }
 
         self.set_message(format!("Expression saved: {}", surface));
+        Ok(())
+    }
+
+    // ─── SRS / Review Methods ────────────────────────────────────────────
+
+    /// Start a review session: load due cards and switch to Review screen.
+    pub fn start_review_session(&mut self) -> Result<()> {
+        let conn = self.open_db()?;
+        let srs = match self.srs_engine.as_ref() {
+            Some(s) => s,
+            None => {
+                self.set_message("SRS engine not initialized");
+                return Ok(());
+            }
+        };
+
+        let (total_due, total_new) = models::get_due_card_counts(&conn)?;
+        let limit = if self.config.srs.max_reviews_per_session > 0 {
+            self.config.srs.max_reviews_per_session as usize
+        } else {
+            200 // reasonable batch limit
+        };
+
+        let due_cards = srs.get_due_cards(&conn, limit)?;
+
+        // Build vocabulary cache for sentence context rendering
+        let mut vocabulary_cache = HashMap::new();
+        {
+            let mut stmt = conn.prepare("SELECT * FROM vocabulary")?;
+            let rows = stmt.query_map([], Vocabulary::from_row)?;
+            for row in rows {
+                if let Ok(v) = row {
+                    vocabulary_cache.insert((v.base_form.clone(), v.reading.clone()), v);
+                }
+            }
+        }
+
+        // Build a gloss cache for sentence context tokens
+        let mut gloss_cache: HashMap<String, String> = HashMap::new();
+
+        // Build card data for each due card
+        let user_expressions = models::list_user_expressions(&conn).unwrap_or_default();
+        let mut queue: Vec<ReviewCardData> = Vec::new();
+        for card in due_cards {
+            let vocab_id = match card.vocabulary_id {
+                Some(id) => id,
+                None => continue,
+            };
+            let vocabulary = match models::get_vocabulary_by_id(&conn, vocab_id)? {
+                Some(v) => v,
+                None => continue,
+            };
+
+            let definitions =
+                dictionary::lookup(&conn, &vocabulary.base_form, None).unwrap_or_default();
+
+            // Get sentence context tokens
+            let db_tokens = models::get_sentence_tokens_for_vocab(&conn, vocab_id)?;
+            let sentence_text: String = db_tokens.iter().map(|t| t.surface.as_str()).collect();
+
+            // Build TokenDisplay for sentence context
+            let mut sentence_tokens: Vec<TokenDisplay> = db_tokens
+                .iter()
+                .map(|t| {
+                    let key = (t.base_form.clone(), t.reading.clone());
+                    let status = vocabulary_cache
+                        .get(&key)
+                        .map(|v| v.status)
+                        .unwrap_or(VocabularyStatus::New);
+                    let is_trivial =
+                        is_trivial_pos(&t.pos, &t.surface) || status == VocabularyStatus::Ignored;
+
+                    // Populate short_gloss from cache or JMdict lookup
+                    let short_gloss = if !is_trivial {
+                        if let Some(cached) = gloss_cache.get(&t.base_form) {
+                            cached.clone()
+                        } else {
+                            let gloss = dictionary::lookup(&conn, &t.base_form, None)
+                                .ok()
+                                .and_then(|entries| entries.first().map(|e| e.short_gloss()))
+                                .unwrap_or_default();
+                            gloss_cache.insert(t.base_form.clone(), gloss.clone());
+                            gloss
+                        }
+                    } else {
+                        String::new()
+                    };
+
+                    TokenDisplay {
+                        surface: t.surface.clone(),
+                        base_form: t.base_form.clone(),
+                        reading: t.reading.clone(),
+                        surface_reading: t.surface_reading.clone(),
+                        pos: t.pos.clone(),
+                        vocabulary_status: status,
+                        is_selected: false,
+                        short_gloss,
+                        conjugation_form: translate_conjugation_form(&t.conjugation_form),
+                        conjugation_type: translate_conjugation_type(&t.conjugation_type),
+                        is_trivial,
+                        group_id: None,
+                        is_group_head: false,
+                        conjugation_desc: String::new(),
+                        mwe_gloss: String::new(),
+                    }
+                })
+                .collect();
+
+            // Apply conjugation grouping (same logic as reader's build_sentences)
+            apply_conjugation_groups(&mut sentence_tokens);
+
+            // Detect and apply MWE matches
+            let mwe_matches = detect_sentence_mwes(&conn, &sentence_tokens, &user_expressions, 12);
+            apply_mwe_matches(&mut sentence_tokens, &mwe_matches);
+
+            // Detect compound context: find the target word in sentence tokens
+            // and aggregate group surface/reading if it belongs to a group
+            let target_token = sentence_tokens
+                .iter()
+                .find(|t| t.base_form == vocabulary.base_form && t.reading == vocabulary.reading);
+
+            let (display_surface, display_reading, target_group_id) =
+                if let Some(token) = target_token {
+                    if let Some(gid) = token.group_id {
+                        // Compound word — aggregate all group members
+                        let surface: String = sentence_tokens
+                            .iter()
+                            .filter(|t| t.group_id == Some(gid))
+                            .map(|t| t.surface.as_str())
+                            .collect();
+                        let reading: String = sentence_tokens
+                            .iter()
+                            .filter(|t| t.group_id == Some(gid))
+                            .map(|t| {
+                                if !t.surface_reading.is_empty() {
+                                    t.surface_reading.as_str()
+                                } else if !t.reading.is_empty() {
+                                    t.reading.as_str()
+                                } else {
+                                    t.surface.as_str()
+                                }
+                            })
+                            .collect();
+                        (surface, reading, Some(gid))
+                    } else {
+                        (
+                            vocabulary.base_form.clone(),
+                            vocabulary.reading.clone(),
+                            None,
+                        )
+                    }
+                } else {
+                    (
+                        vocabulary.base_form.clone(),
+                        vocabulary.reading.clone(),
+                        None,
+                    )
+                };
+
+            // For MWE compounds, try looking up the full expression in JMdict
+            let definitions =
+                if target_group_id.is_some() && display_surface != vocabulary.base_form {
+                    let mwe_defs =
+                        dictionary::lookup(&conn, &display_surface, None).unwrap_or_default();
+                    if !mwe_defs.is_empty() {
+                        mwe_defs
+                    } else {
+                        definitions
+                    }
+                } else {
+                    definitions
+                };
+
+            let answer_mode = AnswerMode::from_str(&card.answer_mode);
+
+            queue.push(ReviewCardData {
+                card,
+                vocabulary,
+                definitions,
+                sentence_tokens,
+                sentence_text,
+                answer_mode,
+                display_surface,
+                display_reading,
+                target_group_id,
+            });
+        }
+
+        // Shuffle the queue so cards don't always appear in due_date order
+        {
+            use rand::seq::SliceRandom;
+            let mut rng = rand::thread_rng();
+            queue.shuffle(&mut rng);
+        }
+
+        let phase = if queue.is_empty() {
+            ReviewPhase::SessionSummary
+        } else {
+            ReviewPhase::PreSession
+        };
+
+        self.review_state = Some(ReviewState {
+            queue,
+            current_index: 0,
+            phase,
+            typed_input: String::new(),
+            card_shown_at: Instant::now(),
+            context_word_index: None,
+            total_reviewed: 0,
+            correct_count: 0,
+            total_due,
+            total_new,
+            vocabulary_cache,
+            auto_rating: None,
+            typed_result: None,
+        });
+
+        self.previous_screen = Some(self.screen.clone());
+        self.screen = Screen::Review;
+        Ok(())
+    }
+
+    /// Begin showing the first card (transition from PreSession to ShowFront).
+    pub fn begin_review(&mut self) {
+        if let Some(ref mut state) = self.review_state {
+            if !state.queue.is_empty() {
+                state.phase = ReviewPhase::ShowFront;
+                state.card_shown_at = Instant::now();
+                // For typed reading mode, go directly to typing
+                if let Some(card_data) = state.queue.get(state.current_index) {
+                    if card_data.answer_mode == AnswerMode::TypedReading {
+                        state.phase = ReviewPhase::TypingAnswer;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Reveal the answer (transition from ShowFront to ShowBack).
+    pub fn reveal_answer(&mut self) {
+        if let Some(ref mut state) = self.review_state {
+            state.phase = ReviewPhase::ShowBack;
+        }
+    }
+
+    /// Submit a typed answer (typed reading mode).
+    pub fn submit_typed_answer(&mut self) {
+        if let Some(ref mut state) = self.review_state {
+            if let Some(card_data) = state.queue.get(state.current_index) {
+                let expected = &card_data.display_reading;
+                let input = state.typed_input.clone();
+                let distance = strsim::levenshtein(&input, expected);
+                let is_correct = distance == 0;
+
+                // Auto-rate based on edit distance
+                let auto_rating = match distance {
+                    0 => Rating::Easy,
+                    1 => Rating::Good,
+                    2 => Rating::Hard,
+                    _ => Rating::Again,
+                };
+
+                state.auto_rating = Some(auto_rating);
+                state.typed_result = Some((input, expected.clone(), is_correct));
+                state.phase = ReviewPhase::ShowResult;
+            }
+        }
+    }
+
+    /// Rate the current card and advance to the next one.
+    pub fn rate_card(&mut self, rating: Rating) -> Result<()> {
+        let (card_id, elapsed_ms, typed_answer, answer_correct) = {
+            let state = match self.review_state.as_ref() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            let card_data = match state.queue.get(state.current_index) {
+                Some(c) => c,
+                None => return Ok(()),
+            };
+            let elapsed = state.card_shown_at.elapsed().as_millis() as u64;
+            let correct = rating != Rating::Again;
+            let typed = state
+                .typed_result
+                .as_ref()
+                .map(|(input, _, _)| input.clone());
+            (card_data.card.id, elapsed, typed, correct)
+        };
+
+        // Record the review via SRS engine
+        let conn = self.open_db()?;
+        if let Some(ref srs) = self.srs_engine {
+            srs.record_review(
+                &conn,
+                card_id,
+                rating,
+                elapsed_ms,
+                typed_answer.as_deref(),
+                answer_correct,
+            )?;
+        }
+
+        // Update session stats
+        if let Some(ref mut state) = self.review_state {
+            state.total_reviewed += 1;
+            if answer_correct {
+                state.correct_count += 1;
+            }
+
+            // Advance to next card
+            state.current_index += 1;
+            state.typed_input.clear();
+            state.auto_rating = None;
+            state.typed_result = None;
+            state.context_word_index = None;
+
+            if state.current_index >= state.queue.len() {
+                // All cards done
+                state.phase = ReviewPhase::SessionSummary;
+            } else {
+                // Show next card
+                state.card_shown_at = Instant::now();
+                let next_mode = state.queue[state.current_index].answer_mode.clone();
+                if next_mode == AnswerMode::TypedReading {
+                    state.phase = ReviewPhase::TypingAnswer;
+                } else {
+                    state.phase = ReviewPhase::ShowFront;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Open word detail popup for the selected word in review sentence context.
+    pub fn open_review_word_detail(&mut self) -> Result<()> {
+        let (base_form, reading) = {
+            let state = match self.review_state.as_ref() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            let word_idx = match state.context_word_index {
+                Some(i) => i,
+                None => return Ok(()),
+            };
+            let card_data = match state.queue.get(state.current_index) {
+                Some(c) => c,
+                None => return Ok(()),
+            };
+            if word_idx >= card_data.sentence_tokens.len() {
+                return Ok(());
+            }
+            let token = &card_data.sentence_tokens[word_idx];
+            if token.is_trivial {
+                self.set_message("No dictionary entry for punctuation");
+                return Ok(());
+            }
+            (token.base_form.clone(), token.reading.clone())
+        };
+
+        let conn = self.open_db()?;
+        let entries = dictionary::lookup(&conn, &base_form, None)?;
+
+        let vocab_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM vocabulary WHERE base_form = ?1 AND reading = ?2",
+                rusqlite::params![base_form, reading],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let conjugations = if let Some(vid) = vocab_id {
+            let mut stmt = conn.prepare(
+                "SELECT surface, encounter_count FROM conjugation_encounters WHERE vocabulary_id = ?1 ORDER BY encounter_count DESC"
+            )?;
+            let rows = stmt.query_map(rusqlite::params![vid], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+            })?;
+            rows.filter_map(|r| r.ok()).collect()
+        } else {
+            vec![]
+        };
+
+        let notes = vocab_id
+            .and_then(|vid| models::get_vocabulary_by_id(&conn, vid).ok().flatten())
+            .and_then(|v| v.notes);
+
+        self.popup = Some(PopupState::WordDetail {
+            base_form,
+            reading,
+            entries,
+            conjugations,
+            notes,
+            scroll: 0,
+        });
+
         Ok(())
     }
 

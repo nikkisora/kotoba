@@ -612,7 +612,7 @@ By default, the sidebar hides readings for Known (5) and Ignored (-1) words, mat
 **Goal**: Full FSRS-powered review system with multiple card types and review modes.
 
 #### 4.1 FSRS Engine Integration
-- [ ] Implement `core/srs.rs`:
+- [x] Implement `core/srs.rs`:
   - Initialize `fsrs::FSRS` with default parameters (or user-configured via TOML)
   - `create_word_card(vocabulary_id: i64, conn: &Connection)`:
     - Insert into `srs_cards` with `card_type = Word`, `answer_mode` = user's default preference
@@ -630,7 +630,7 @@ By default, the sidebar hides readings for Known (5) and Ignored (-1) words, mat
   - `retire_card(card_id: i64, conn: &Connection)` — set state to Retired (when word reaches Known)
 
 #### 4.2 SRS Card Auto-Generation
-- [ ] Hook into Reader status change flow:
+- [x] Hook into Reader status change flow:
   - When word status changes to Learning (1-4):
     - Check if word card exists for this vocabulary_id; if not, call `create_word_card()`
     - Check if sentence card exists for current sentence; if not, call `create_sentence_card()`
@@ -641,7 +641,7 @@ By default, the sidebar hides readings for Known (5) and Ignored (-1) words, mat
     - Retire any active SRS cards for this word
 
 #### 4.3 Review Screen UI
-- [ ] Implement `ui/screens/review.rs`:
+- [x] Implement `ui/screens/review.rs`:
   - `ReviewState` struct:
     - `queue: Vec<SrsCard>` — loaded batch of due cards
     - `current_index: usize`
@@ -671,22 +671,22 @@ By default, the sidebar hides readings for Known (5) and Ignored (-1) words, mat
     - User presses `Space` to reveal answer
     - Back: word shown in context, highlighted
     - Rate: `1`-`4`
-- [ ] Sentence context in all modes:
+- [x] Sentence context in all modes:
   - Below the card, show the source sentence
   - All words in the sentence are colored by vocabulary status
   - Left/Right arrow keys allow navigating words in the sentence context
   - Pressing Enter on a context word shows its JMdict definition in a tooltip/popup
-- [ ] Session summary:
+- [x] Session summary:
   - After all due cards reviewed, show: total reviewed, accuracy %, next review time
   - Option to continue with cards due soon (next 24h) or return to Library
 
 #### 4.4 Review Session Configuration
-- [ ] Settings (in TOML config):
+- [x] Settings (in TOML config):
   - `default_answer_mode`: which review mode to use by default
   - `new_cards_per_day`: limit on new cards introduced per session (default: 20)
   - `max_reviews_per_session`: optional cap (default: unlimited)
   - `review_order`: "due_first" (default) or "random"
-- [ ] TUI review session start: show summary (X cards due, Y new) with option to adjust before starting
+- [x] TUI review session start: show summary (X cards due, Y new) with option to adjust before starting
 
 ---
 
