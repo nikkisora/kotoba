@@ -234,6 +234,30 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect) {
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
+        AnswerMode::SentenceFull => {
+            // Show the full sentence, ask for translation
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Translate this sentence:",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {}", card_data.sentence_text),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Press Space to reveal translation",
+                    Style::default().fg(Color::DarkGray),
+                ))
+                .alignment(Alignment::Center),
+            ];
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        }
     }
 
     // Sentence context below — blank the target word for cloze cards
@@ -279,6 +303,22 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
                 ]),
                 Line::from(""),
             ];
+
+            // Show user translation if available (before JMdict definitions)
+            if let Some(ref translation) = card_data.vocabulary.translation {
+                if !translation.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ★ ", Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            translation.as_str(),
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                    lines.push(Line::from(""));
+                }
+            }
 
             // Show definitions
             for entry in &card_data.definitions {
@@ -331,6 +371,16 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
                 Line::from(""),
             ];
 
+            // Show user translation if available
+            if let Some(ref translation) = card_data.vocabulary.translation {
+                if !translation.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ★ ", Style::default().fg(Color::Yellow)),
+                        Span::styled(translation.as_str(), Style::default().fg(Color::Green)),
+                    ]));
+                }
+            }
+
             // Show first definition
             if let Some(entry) = card_data.definitions.first() {
                 lines.push(Line::from(Span::styled(
@@ -367,6 +417,16 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
                 Line::from(""),
             ];
 
+            // Show user translation if available
+            if let Some(ref translation) = card_data.vocabulary.translation {
+                if !translation.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ★ ", Style::default().fg(Color::Yellow)),
+                        Span::styled(translation.as_str(), Style::default().fg(Color::Green)),
+                    ]));
+                }
+            }
+
             // Show first definition
             if let Some(entry) = card_data.definitions.first() {
                 lines.push(Line::from(Span::styled(
@@ -382,6 +442,35 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
         AnswerMode::TypedReading => {
             // Shouldn't reach here normally
             frame.render_widget(Paragraph::new(""), inner);
+        }
+        AnswerMode::SentenceFull => {
+            // Show sentence + translation
+            let translation = card_data
+                .sentence_translation_text
+                .as_deref()
+                .unwrap_or("(no translation)");
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {}", card_data.sentence_text),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("  Translation: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        translation,
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(""),
+            ];
+            lines.push(rating_hint_line());
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         }
     }
 

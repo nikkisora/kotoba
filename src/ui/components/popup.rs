@@ -524,6 +524,140 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             frame.render_widget(paragraph, area);
         }
 
+        PopupState::TranslationEditor {
+            base_form,
+            reading,
+            text,
+            ..
+        } => {
+            let area = centered_rect(55, 30, frame.size());
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Word: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(base_form.as_str(), Style::default().fg(Color::Cyan)),
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("({})", reading),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Translation:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!("▎{}_", text),
+                    Style::default().fg(Color::Green),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Type to edit • Enter to save • Esc to cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let block = Block::default()
+                .title(Span::styled(
+                    " Word Translation ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+
+        PopupState::SentenceTranslationEditor {
+            sentence_text,
+            translation,
+            ..
+        } => {
+            let area = centered_rect(65, 40, frame.size());
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
+
+            // Truncate sentence for display
+            let display_text: String = sentence_text.chars().take(80).collect();
+            let truncated = if sentence_text.chars().count() > 80 {
+                format!("{}...", display_text)
+            } else {
+                display_text
+            };
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Sentence:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(truncated, Style::default().fg(Color::Cyan))),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Translation:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!("▎{}_", translation),
+                    Style::default().fg(Color::Green),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "An SRS card will be created (sentence → translation).",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Type to edit • Enter to save • Esc to cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let block = Block::default()
+                .title(Span::styled(
+                    " Sentence Translation ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green));
+
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(paragraph, area);
+        }
+
+        PopupState::DeleteCardConfirm { card_id } => {
+            let area = centered_rect(40, 15, frame.size());
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("Delete SRS card #{}?", card_id),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from("  y — Yes, delete"),
+                Line::from("  n — No, cancel"),
+            ];
+
+            let block = Block::default()
+                .title(" Confirm Delete Card ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, area);
+        }
+
         PopupState::SearchInput { text } => {
             let area = centered_rect(50, 15, frame.size());
             frame.render_widget(Clear, padded_rect(area, frame.size()));

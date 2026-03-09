@@ -299,6 +299,17 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             return;
         }
         KeyCode::Tab => {
+            // On Settings/CardBrowser screens, Tab switches categories instead
+            // of triggering the global reader toggle.
+            if app.screen == Screen::Settings || app.screen == Screen::CardBrowser {
+                // Let the screen-specific handler deal with Tab
+                match &app.screen.clone() {
+                    Screen::Settings => handle_settings_key(app, key),
+                    Screen::CardBrowser => handle_card_browser_key(app, key),
+                    _ => {}
+                }
+                return;
+            }
             // Tab toggles between Reader <-> non-Reader
             if app.screen == Screen::Reader {
                 // Go back to previous screen
@@ -353,6 +364,293 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
         }
         Screen::Reader => handle_reader_key(app, key),
         Screen::Review => handle_review_key(app, key),
+        Screen::CardBrowser => handle_card_browser_key(app, key),
+        Screen::Settings => handle_settings_key(app, key),
+    }
+}
+
+fn handle_card_browser_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut state) = app.card_browser_state {
+                state.selected = state.selected.saturating_sub(1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            let filtered = app.card_browser_filtered_entries();
+            let max = filtered.len().saturating_sub(1);
+            if let Some(ref mut state) = app.card_browser_state {
+                state.selected = (state.selected + 1).min(max);
+            }
+        }
+        KeyCode::Char('f') => {
+            // Cycle filter
+            if let Some(ref mut state) = app.card_browser_state {
+                state.filter = state.filter.next();
+                state.selected = 0;
+            }
+        }
+        KeyCode::Char('s') => {
+            // Cycle sort
+            if let Some(ref mut state) = app.card_browser_state {
+                state.sort = state.sort.next();
+            }
+        }
+        KeyCode::Char('m') => {
+            // Cycle answer mode for selected card
+            let card_info = {
+                let filtered = app.card_browser_filtered_entries();
+                app.card_browser_state.as_ref().and_then(|state| {
+                    filtered
+                        .get(state.selected)
+                        .and_then(|&idx| state.entries.get(idx))
+                        .map(|e| {
+                            let current = models::AnswerMode::from_str(&e.card.answer_mode);
+                            (e.card.id, current.next().as_str().to_string())
+                        })
+                })
+            };
+            if let Some((card_id, new_mode)) = card_info {
+                let conn = match app.open_db() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        app.set_message(format!("DB error: {}", e));
+                        return;
+                    }
+                };
+                if let Err(e) = models::update_card_answer_mode(&conn, card_id, &new_mode) {
+                    app.set_message(format!("Error: {}", e));
+                } else {
+                    app.set_message(format!("Answer mode → {}", new_mode));
+                    let _ = app.load_card_browser();
+                }
+            }
+        }
+        KeyCode::Char('r') => {
+            // Reset selected card
+            let card_id = {
+                let filtered = app.card_browser_filtered_entries();
+                app.card_browser_state.as_ref().and_then(|state| {
+                    filtered
+                        .get(state.selected)
+                        .and_then(|&idx| state.entries.get(idx))
+                        .map(|e| e.card.id)
+                })
+            };
+            if let Some(card_id) = card_id {
+                let conn = match app.open_db() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        app.set_message(format!("DB error: {}", e));
+                        return;
+                    }
+                };
+                if let Err(e) = models::reset_srs_card(&conn, card_id) {
+                    app.set_message(format!("Error: {}", e));
+                } else {
+                    app.set_message("Card reset to new");
+                    let _ = app.load_card_browser();
+                }
+            }
+        }
+        KeyCode::Char('d') => {
+            // Delete selected card (with confirmation)
+            let card_id = {
+                let filtered = app.card_browser_filtered_entries();
+                app.card_browser_state.as_ref().and_then(|state| {
+                    filtered
+                        .get(state.selected)
+                        .and_then(|&idx| state.entries.get(idx))
+                        .map(|e| e.card.id)
+                })
+            };
+            if let Some(card_id) = card_id {
+                app.popup = Some(PopupState::DeleteCardConfirm { card_id });
+            }
+        }
+        KeyCode::Esc => {
+            app.card_browser_state = None;
+            let target = app.previous_screen.take().unwrap_or(Screen::Home);
+            app.screen = target.clone();
+            match target {
+                Screen::Home => {
+                    let _ = app.refresh_home();
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_settings_key(app: &mut App, key: KeyEvent) {
+    let editing = app
+        .settings_state
+        .as_ref()
+        .map(|s| s.editing)
+        .unwrap_or(false);
+
+    if editing {
+        // In edit mode for text/integer values
+        match key.code {
+            KeyCode::Esc => {
+                if let Some(ref mut state) = app.settings_state {
+                    state.editing = false;
+                    state.edit_buffer.clear();
+                }
+            }
+            KeyCode::Enter => {
+                // Apply the edit buffer to the current setting
+                if let Some(ref mut state) = app.settings_state {
+                    let cat = state.selected_category;
+                    let item = state.selected_item;
+                    if let Some(setting) = state
+                        .categories
+                        .get_mut(cat)
+                        .and_then(|c| c.items.get_mut(item))
+                    {
+                        match &setting.value {
+                            app::SettingsValue::Integer(_) => {
+                                if let Ok(v) = state.edit_buffer.parse::<i64>() {
+                                    setting.value = app::SettingsValue::Integer(v);
+                                    state.dirty = true;
+                                }
+                            }
+                            app::SettingsValue::Text(_) => {
+                                setting.value = app::SettingsValue::Text(state.edit_buffer.clone());
+                                state.dirty = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    state.editing = false;
+                    state.edit_buffer.clear();
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(ref mut state) = app.settings_state {
+                    state.edit_buffer.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(ref mut state) = app.settings_state {
+                    state.edit_buffer.push(c);
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut state) = app.settings_state {
+                if state.selected_item > 0 {
+                    state.selected_item -= 1;
+                } else if state.selected_category > 0 {
+                    state.selected_category -= 1;
+                    state.selected_item = state.categories[state.selected_category]
+                        .items
+                        .len()
+                        .saturating_sub(1);
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut state) = app.settings_state {
+                let cat_items = state.categories[state.selected_category].items.len();
+                if state.selected_item + 1 < cat_items {
+                    state.selected_item += 1;
+                } else if state.selected_category + 1 < state.categories.len() {
+                    state.selected_category += 1;
+                    state.selected_item = 0;
+                }
+            }
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            // Switch to previous category
+            if let Some(ref mut state) = app.settings_state {
+                if state.selected_category > 0 {
+                    state.selected_category -= 1;
+                    state.selected_item = 0;
+                }
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => {
+            // Switch to next category
+            if let Some(ref mut state) = app.settings_state {
+                if state.selected_category + 1 < state.categories.len() {
+                    state.selected_category += 1;
+                    state.selected_item = 0;
+                }
+            }
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            // Toggle booleans, cycle choices, enter edit mode for text/integer
+            if let Some(ref mut state) = app.settings_state {
+                let cat = state.selected_category;
+                let item = state.selected_item;
+                if let Some(setting) = state
+                    .categories
+                    .get_mut(cat)
+                    .and_then(|c| c.items.get_mut(item))
+                {
+                    match &setting.value {
+                        app::SettingsValue::Bool(v) => {
+                            setting.value = app::SettingsValue::Bool(!v);
+                            state.dirty = true;
+                        }
+                        app::SettingsValue::Choice(current, options) => {
+                            // Cycle to next option
+                            let idx = options.iter().position(|o| o == current).unwrap_or(0);
+                            let next_idx = (idx + 1) % options.len();
+                            let new_val = options[next_idx].clone();
+                            let opts = options.clone();
+                            setting.value = app::SettingsValue::Choice(new_val, opts);
+                            state.dirty = true;
+                        }
+                        app::SettingsValue::Integer(v) => {
+                            state.edit_buffer = v.to_string();
+                            state.editing = true;
+                        }
+                        app::SettingsValue::Text(v) => {
+                            state.edit_buffer = v.clone();
+                            state.editing = true;
+                        }
+                    }
+                }
+            }
+        }
+        KeyCode::Char('s') => {
+            // Save settings
+            if let Err(e) = app.apply_settings() {
+                app.set_message(format!("Error saving settings: {}", e));
+            }
+        }
+        KeyCode::Esc => {
+            // Check if dirty and warn, or just go back
+            let dirty = app
+                .settings_state
+                .as_ref()
+                .map(|s| s.dirty)
+                .unwrap_or(false);
+            if dirty {
+                // Auto-save on exit
+                if let Err(e) = app.apply_settings() {
+                    app.set_message(format!("Error saving settings: {}", e));
+                }
+            }
+            app.settings_state = None;
+            let target = app.previous_screen.take().unwrap_or(Screen::Home);
+            app.screen = target.clone();
+            match target {
+                Screen::Home => {
+                    let _ = app.refresh_home();
+                }
+                _ => {}
+            }
+        }
+        _ => {}
     }
 }
 
@@ -668,6 +966,76 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             }
             _ => {}
         },
+        PopupState::TranslationEditor { .. } => match key.code {
+            KeyCode::Esc => app.popup = None,
+            KeyCode::Enter => {
+                if let Err(e) = app.save_word_translation() {
+                    app.set_message(format!("Error saving translation: {}", e));
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(PopupState::TranslationEditor { ref mut text, .. }) = app.popup {
+                    text.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(PopupState::TranslationEditor { ref mut text, .. }) = app.popup {
+                    text.push(c);
+                }
+            }
+            _ => {}
+        },
+        PopupState::SentenceTranslationEditor { .. } => match key.code {
+            KeyCode::Esc => app.popup = None,
+            KeyCode::Enter => {
+                if let Err(e) = app.save_sentence_translation() {
+                    app.set_message(format!("Error saving translation: {}", e));
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(PopupState::SentenceTranslationEditor {
+                    ref mut translation,
+                    ..
+                }) = app.popup
+                {
+                    translation.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(PopupState::SentenceTranslationEditor {
+                    ref mut translation,
+                    ..
+                }) = app.popup
+                {
+                    translation.push(c);
+                }
+            }
+            _ => {}
+        },
+        PopupState::DeleteCardConfirm { .. } => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(PopupState::DeleteCardConfirm { card_id }) = app.popup {
+                    let conn = match app.open_db() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            app.set_message(format!("DB error: {}", e));
+                            app.popup = None;
+                            return;
+                        }
+                    };
+                    if let Err(e) = models::delete_srs_card(&conn, card_id) {
+                        app.set_message(format!("Error deleting card: {}", e));
+                    } else {
+                        app.set_message("Card deleted");
+                        // Reload card browser
+                        let _ = app.load_card_browser();
+                    }
+                }
+                app.popup = None;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.popup = None,
+            _ => {}
+        },
     }
 }
 
@@ -735,6 +1103,14 @@ fn handle_home_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('i') => {
             app.popup = Some(PopupState::ImportMenu);
+        }
+        KeyCode::Char('c') => {
+            if let Err(e) = app.load_card_browser() {
+                app.set_message(format!("Card browser error: {}", e));
+            }
+        }
+        KeyCode::Char('s') => {
+            app.load_settings();
         }
         _ => {}
     }
@@ -1483,6 +1859,20 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('C') => {
             if let Err(e) = app.copy_sentence_to_clipboard() {
                 app.set_message(format!("Copy failed: {}", e));
+            }
+        }
+
+        // Word translation editor
+        KeyCode::Char('t') => {
+            if let Err(e) = app.open_translation_editor() {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+
+        // Sentence translation editor
+        KeyCode::Char('T') => {
+            if let Err(e) = app.open_sentence_translation_editor() {
+                app.set_message(format!("Error: {}", e));
             }
         }
 

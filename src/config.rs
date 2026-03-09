@@ -45,6 +45,15 @@ pub struct SrsConfig {
     /// Review order: "due_first" (default) or "random".
     #[serde(default = "default_review_order")]
     pub review_order: String,
+    /// Include word cards in review sessions.
+    #[serde(default = "default_true")]
+    pub review_word_cards: bool,
+    /// Include sentence cloze cards in review sessions.
+    #[serde(default = "default_true")]
+    pub review_sentence_cloze_cards: bool,
+    /// Include sentence full cards in review sessions.
+    #[serde(default = "default_true")]
+    pub review_sentence_full_cards: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +116,9 @@ impl Default for SrsConfig {
             new_cards_per_day: 20,
             max_reviews_per_session: 0,
             review_order: default_review_order(),
+            review_word_cards: true,
+            review_sentence_cloze_cards: true,
+            review_sentence_full_cards: true,
         }
     }
 }
@@ -184,6 +196,27 @@ impl AppConfig {
         config.ensure_data_dir()?;
         Ok(config)
     }
+}
+
+/// Save the current config to a TOML file.
+/// Writes to the XDG config location or the local kotoba.toml.
+pub fn save_config(config: &AppConfig) -> Result<()> {
+    let content = toml::to_string_pretty(config).context("Failed to serialize config")?;
+
+    // Try XDG config dir first, then local
+    let config_path = if let Some(cfg_dir) = dirs::config_dir() {
+        let dir = cfg_dir.join("kotoba");
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir)?;
+        }
+        dir.join("kotoba.toml")
+    } else {
+        PathBuf::from("kotoba.toml")
+    };
+
+    std::fs::write(&config_path, content)
+        .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+    Ok(())
 }
 
 impl Default for AppConfig {

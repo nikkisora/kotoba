@@ -89,15 +89,44 @@ impl SrsEngine {
         Ok(Some(card_id))
     }
 
-    /// Get due cards, filtering out sentence cards where all vocabulary is Known.
-    pub fn get_due_cards(&self, conn: &Connection, limit: usize) -> Result<Vec<SrsCard>> {
+    /// Get due cards, filtering out sentence cards where all vocabulary is Known,
+    /// and respecting card type filter settings.
+    pub fn get_due_cards(
+        &self,
+        conn: &Connection,
+        limit: usize,
+        review_word_cards: bool,
+        review_sentence_cloze_cards: bool,
+        review_sentence_full_cards: bool,
+    ) -> Result<Vec<SrsCard>> {
         let cards = models::get_due_cards(conn, limit)?;
-        // For sentence cards, check if target vocabulary is still Learning
         let filtered: Vec<SrsCard> = cards
             .into_iter()
             .filter(|card| {
-                if card.card_type == "sentence" {
-                    // Check if the vocabulary is still in Learning state
+                // Filter by card type settings
+                let mode = AnswerMode::from_str(&card.answer_mode);
+                match mode {
+                    AnswerMode::MeaningRecall
+                    | AnswerMode::ReadingRecall
+                    | AnswerMode::TypedReading => {
+                        if !review_word_cards {
+                            return false;
+                        }
+                    }
+                    AnswerMode::SentenceCloze => {
+                        if !review_sentence_cloze_cards {
+                            return false;
+                        }
+                    }
+                    AnswerMode::SentenceFull => {
+                        if !review_sentence_full_cards {
+                            return false;
+                        }
+                    }
+                }
+
+                // For sentence cloze cards, check if target vocabulary is still Learning
+                if card.card_type == "sentence" && mode == AnswerMode::SentenceCloze {
                     if let Some(vid) = card.vocabulary_id {
                         if let Ok(Some(vocab)) = models::get_vocabulary_by_id(conn, vid) {
                             return matches!(
@@ -109,10 +138,10 @@ impl SrsEngine {
                             );
                         }
                     }
-                    false
-                } else {
-                    true
+                    return false;
                 }
+
+                true
             })
             .collect();
         Ok(filtered)
@@ -166,9 +195,17 @@ impl SrsEngine {
             Rating::Easy => &next_states.easy,
         };
 
-        // Calculate new due date
-        let interval_days = next_state.interval.round().max(1.0) as i64;
-        let new_due = Utc::now().naive_utc() + chrono::Duration::days(interval_days);
+        // Calculate new due date.
+        // For Again rating, use a short interval (10 minutes) so the card
+        // reappears soon rather than being pushed to the next day.
+        // For other ratings, use the FSRS-computed interval (minimum 1 day).
+        let new_due = if rating == Rating::Again {
+            // Short re-study interval: 10 minutes
+            Utc::now().naive_utc() + chrono::Duration::minutes(10)
+        } else {
+            let interval_days = next_state.interval.round().max(1.0) as i64;
+            Utc::now().naive_utc() + chrono::Duration::days(interval_days)
+        };
         let due_date_str = new_due.format("%Y-%m-%d %H:%M:%S").to_string();
 
         // Determine new card state

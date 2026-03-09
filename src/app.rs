@@ -27,6 +27,8 @@ pub enum Screen {
     ChapterSelect { source_id: i64 },
     Reader,
     Review,
+    CardBrowser,
+    Settings,
 }
 
 /// What kind of popup is being shown.
@@ -68,6 +70,22 @@ pub enum PopupState {
         reading: String,
         gloss: String,
     },
+    /// Word translation editor (keybinding: `t` in Reader).
+    TranslationEditor {
+        vocabulary_id: i64,
+        base_form: String,
+        reading: String,
+        text: String,
+    },
+    /// Sentence translation editor (keybinding: `T` in Reader).
+    SentenceTranslationEditor {
+        text_id: i64,
+        sentence_index: usize,
+        sentence_text: String,
+        translation: String,
+    },
+    /// Delete SRS card confirmation.
+    DeleteCardConfirm { card_id: i64 },
 }
 
 /// A token as displayed in the reader.
@@ -173,6 +191,8 @@ pub struct ReaderState {
     /// Expression marking mode: Some((start, end)) token indices in current sentence.
     /// When active, Left/Right extend the range. Enter saves, Esc cancels.
     pub expression_mark: Option<(usize, usize)>,
+    /// Cached sentence translations keyed by sentence_index.
+    pub sentence_translations: HashMap<usize, models::SentenceTranslation>,
 }
 
 /// How the library list is sorted.
@@ -408,6 +428,8 @@ pub struct ReviewCardData {
     pub display_reading: String,
     /// Group ID of the target word in sentence_tokens (for cloze blanking).
     pub target_group_id: Option<usize>,
+    /// For SentenceFull cards: the sentence translation text.
+    pub sentence_translation_text: Option<String>,
 }
 
 /// Review screen state.
@@ -439,6 +461,131 @@ pub struct ReviewState {
     pub typed_result: Option<(String, String, bool)>,
 }
 
+// ─── Card Browser ────────────────────────────────────────────────────
+
+/// An entry in the card browser list.
+#[derive(Debug, Clone)]
+pub struct CardBrowserEntry {
+    pub card: SrsCard,
+    pub vocabulary: Option<Vocabulary>,
+    pub sentence_translation: Option<models::SentenceTranslation>,
+    pub display_front: String,
+    pub display_back: String,
+    pub due_label: String,
+}
+
+/// Filter for the card browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CardBrowserFilter {
+    All,
+    DueNow,
+    WordCards,
+    SentenceCards,
+    New,
+    Learning,
+    Review,
+    Retired,
+}
+
+impl CardBrowserFilter {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::DueNow => "Due Now",
+            Self::WordCards => "Word Cards",
+            Self::SentenceCards => "Sentence Cards",
+            Self::New => "State: New",
+            Self::Learning => "State: Learning",
+            Self::Review => "State: Review",
+            Self::Retired => "State: Retired",
+        }
+    }
+    pub fn next(&self) -> Self {
+        match self {
+            Self::All => Self::DueNow,
+            Self::DueNow => Self::WordCards,
+            Self::WordCards => Self::SentenceCards,
+            Self::SentenceCards => Self::New,
+            Self::New => Self::Learning,
+            Self::Learning => Self::Review,
+            Self::Review => Self::Retired,
+            Self::Retired => Self::All,
+        }
+    }
+}
+
+/// Sort order for the card browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CardBrowserSort {
+    DueDate,
+    CreatedDate,
+    Word,
+}
+
+impl CardBrowserSort {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::DueDate => "Due Date",
+            Self::CreatedDate => "Created",
+            Self::Word => "Word",
+        }
+    }
+    pub fn next(&self) -> Self {
+        match self {
+            Self::DueDate => Self::CreatedDate,
+            Self::CreatedDate => Self::Word,
+            Self::Word => Self::DueDate,
+        }
+    }
+}
+
+/// Card browser screen state.
+pub struct CardBrowserState {
+    pub entries: Vec<CardBrowserEntry>,
+    pub selected: usize,
+    pub scroll_offset: usize,
+    pub filter: CardBrowserFilter,
+    pub sort: CardBrowserSort,
+}
+
+// ─── Settings ────────────────────────────────────────────────────────
+
+/// A setting value type.
+#[derive(Debug, Clone)]
+pub enum SettingsValue {
+    Bool(bool),
+    Integer(i64),
+    Text(String),
+    /// A value chosen from a fixed list of options: (current_value, all_options).
+    Choice(String, Vec<String>),
+}
+
+/// A single settings item.
+#[derive(Debug, Clone)]
+pub struct SettingsItem {
+    pub key: String,
+    pub label: String,
+    pub description: String,
+    pub value: SettingsValue,
+}
+
+/// A category of settings.
+#[derive(Debug, Clone)]
+pub struct SettingsCategory {
+    pub name: String,
+    pub items: Vec<SettingsItem>,
+}
+
+/// Settings screen state.
+pub struct SettingsState {
+    pub categories: Vec<SettingsCategory>,
+    pub selected_category: usize,
+    pub selected_item: usize,
+    pub editing: bool,
+    pub edit_buffer: String,
+    pub dirty: bool,
+}
+
 /// Central application state.
 pub struct App {
     pub screen: Screen,
@@ -449,6 +596,8 @@ pub struct App {
     pub chapter_select_state: Option<ChapterSelectState>,
     pub home_state: Option<HomeState>,
     pub review_state: Option<ReviewState>,
+    pub card_browser_state: Option<CardBrowserState>,
+    pub settings_state: Option<SettingsState>,
     pub srs_engine: Option<SrsEngine>,
     pub background_importer: Option<crate::import::background::BackgroundImporter>,
     /// Set of chapter_ids currently being preprocessed (for UI spinners).
@@ -482,6 +631,8 @@ impl App {
             chapter_select_state: None,
             home_state: None,
             review_state: None,
+            card_browser_state: None,
+            settings_state: None,
             srs_engine: SrsEngine::new().ok(),
             background_importer: None,
             preprocessing_chapters: std::collections::HashSet::new(),
@@ -761,7 +912,24 @@ impl App {
                 stats.insert(t.id, s);
             }
         }
-        let due_card_counts = models::get_due_card_counts(&conn).unwrap_or((0, 0));
+        // Use the SRS engine's filtered count to match what the review session
+        // actually shows (accounts for sentence cloze cards with Known vocabulary
+        // being filtered out, and card type filter settings).
+        let due_card_counts = if let Some(ref srs) = self.srs_engine {
+            let cards = srs
+                .get_due_cards(
+                    &conn,
+                    9999,
+                    self.config.srs.review_word_cards,
+                    self.config.srs.review_sentence_cloze_cards,
+                    self.config.srs.review_sentence_full_cards,
+                )
+                .unwrap_or_default();
+            let new_count = cards.iter().filter(|c| c.state == "new").count();
+            (cards.len(), new_count)
+        } else {
+            models::get_due_card_counts(&conn).unwrap_or((0, 0))
+        };
         let prev = self.home_state.as_ref();
         let show_finished = prev.map(|s| s.show_finished).unwrap_or(false);
         let selected = prev
@@ -1019,6 +1187,14 @@ impl App {
             0
         };
 
+        // Load sentence translations
+        let mut sentence_translations = HashMap::new();
+        if let Ok(trans) = models::get_sentence_translations(&conn, text_id) {
+            for t in trans {
+                sentence_translations.insert(t.sentence_index as usize, t);
+            }
+        }
+
         // Update total_sentences and touch last_read_at
         let _ = models::update_total_sentences(&conn, text_id, sentences.len());
         let _ = models::touch_last_read(&conn, text_id);
@@ -1040,6 +1216,7 @@ impl App {
             show_known_in_sidebar: false,
             mwe_matches,
             expression_mark: None,
+            sentence_translations,
         });
 
         self.previous_screen = Some(self.screen.clone());
@@ -2006,7 +2183,13 @@ impl App {
             200 // reasonable batch limit
         };
 
-        let due_cards = srs.get_due_cards(&conn, limit)?;
+        let due_cards = srs.get_due_cards(
+            &conn,
+            limit,
+            self.config.srs.review_word_cards,
+            self.config.srs.review_sentence_cloze_cards,
+            self.config.srs.review_sentence_full_cards,
+        )?;
 
         // Build vocabulary cache for sentence context rendering
         let mut vocabulary_cache = HashMap::new();
@@ -2027,6 +2210,39 @@ impl App {
         let user_expressions = models::list_user_expressions(&conn).unwrap_or_default();
         let mut queue: Vec<ReviewCardData> = Vec::new();
         for card in due_cards {
+            let answer_mode = AnswerMode::from_str(&card.answer_mode);
+
+            // Handle SentenceFull cards (no vocabulary, linked via sentence_translation_id)
+            if answer_mode == AnswerMode::SentenceFull {
+                if let Some(st_id) = card.sentence_translation_id {
+                    if let Ok(Some(st)) = models::get_sentence_translation_by_id(&conn, st_id) {
+                        queue.push(ReviewCardData {
+                            card,
+                            vocabulary: Vocabulary {
+                                id: 0,
+                                base_form: String::new(),
+                                reading: String::new(),
+                                pos: String::new(),
+                                status: VocabularyStatus::New,
+                                notes: None,
+                                translation: None,
+                                first_seen_at: String::new(),
+                                updated_at: String::new(),
+                            },
+                            definitions: vec![],
+                            sentence_tokens: vec![],
+                            sentence_text: st.sentence_text.clone(),
+                            answer_mode,
+                            display_surface: String::new(),
+                            display_reading: String::new(),
+                            target_group_id: None,
+                            sentence_translation_text: Some(st.translation.clone()),
+                        });
+                    }
+                }
+                continue;
+            }
+
             let vocab_id = match card.vocabulary_id {
                 Some(id) => id,
                 None => continue,
@@ -2156,8 +2372,6 @@ impl App {
                     definitions
                 };
 
-            let answer_mode = AnswerMode::from_str(&card.answer_mode);
-
             queue.push(ReviewCardData {
                 card,
                 vocabulary,
@@ -2168,6 +2382,7 @@ impl App {
                 display_surface,
                 display_reading,
                 target_group_id,
+                sentence_translation_text: None,
             });
         }
 
@@ -2446,6 +2661,495 @@ impl App {
     fn set_clipboard(&mut self, text: &str) -> Result<()> {
         let cb = self.clipboard.as_mut().context("Clipboard not available")?;
         cb.set_text(text).context("Failed to write to clipboard")?;
+        Ok(())
+    }
+
+    // ─── Word Translation ────────────────────────────────────────────────
+
+    /// Open word translation editor for the currently selected word.
+    pub fn open_translation_editor(&mut self) -> Result<()> {
+        let (vocab_id, base_form, reading, existing_translation) = {
+            let state = match self.reader_state.as_ref() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            let word_idx = match state.word_index {
+                Some(i) => i,
+                None => {
+                    self.set_message("No word selected");
+                    return Ok(());
+                }
+            };
+            let sentence = &state.sentences[state.sentence_index];
+            if word_idx >= sentence.tokens.len() {
+                return Ok(());
+            }
+            let token = &sentence.tokens[word_idx];
+            if token.is_trivial {
+                self.set_message("Cannot set translation on punctuation/whitespace");
+                return Ok(());
+            }
+            let key = (token.base_form.clone(), token.reading.clone());
+            match state.vocabulary_cache.get(&key) {
+                Some(v) => (
+                    v.id,
+                    v.base_form.clone(),
+                    v.reading.clone(),
+                    v.translation.clone().unwrap_or_default(),
+                ),
+                None => {
+                    // Word not in vocab yet — create it
+                    let conn = self.open_db()?;
+                    let vid = models::upsert_vocabulary(
+                        &conn,
+                        &token.base_form,
+                        &token.reading,
+                        &token.pos,
+                    )?;
+                    (
+                        vid,
+                        token.base_form.clone(),
+                        token.reading.clone(),
+                        String::new(),
+                    )
+                }
+            }
+        };
+
+        self.popup = Some(PopupState::TranslationEditor {
+            vocabulary_id: vocab_id,
+            base_form,
+            reading,
+            text: existing_translation,
+        });
+        Ok(())
+    }
+
+    /// Save word translation from the translation editor popup.
+    pub fn save_word_translation(&mut self) -> Result<()> {
+        if let Some(PopupState::TranslationEditor {
+            vocabulary_id,
+            ref text,
+            ..
+        }) = self.popup
+        {
+            let conn = self.open_db()?;
+            let translation: Option<&str> = if text.is_empty() {
+                None
+            } else {
+                Some(text.as_str())
+            };
+            models::update_vocabulary_translation(&conn, vocabulary_id, translation)?;
+
+            // Update in-memory cache
+            if let Some(vocab) = models::get_vocabulary_by_id(&conn, vocabulary_id)? {
+                if let Some(ref mut state) = self.reader_state {
+                    state
+                        .vocabulary_cache
+                        .insert((vocab.base_form.clone(), vocab.reading.clone()), vocab);
+                }
+            }
+            self.set_message("Translation saved");
+        }
+        self.popup = None;
+        Ok(())
+    }
+
+    // ─── Sentence Translation ────────────────────────────────────────────
+
+    /// Open sentence translation editor for the current sentence.
+    pub fn open_sentence_translation_editor(&mut self) -> Result<()> {
+        let (text_id, sentence_index, sentence_text, existing) = {
+            let state = match self.reader_state.as_ref() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            if state.sentences.is_empty() {
+                return Ok(());
+            }
+            let sentence = &state.sentences[state.sentence_index];
+            let existing = state
+                .sentence_translations
+                .get(&state.sentence_index)
+                .map(|t| t.translation.clone())
+                .unwrap_or_default();
+            (
+                state.text_id,
+                state.sentence_index,
+                sentence.text.clone(),
+                existing,
+            )
+        };
+
+        self.popup = Some(PopupState::SentenceTranslationEditor {
+            text_id,
+            sentence_index,
+            sentence_text,
+            translation: existing,
+        });
+        Ok(())
+    }
+
+    /// Save sentence translation and create SRS card.
+    pub fn save_sentence_translation(&mut self) -> Result<()> {
+        let (text_id, sentence_index, sentence_text, translation) = match self.popup {
+            Some(PopupState::SentenceTranslationEditor {
+                text_id,
+                sentence_index,
+                ref sentence_text,
+                ref translation,
+            }) => (
+                text_id,
+                sentence_index,
+                sentence_text.clone(),
+                translation.clone(),
+            ),
+            _ => return Ok(()),
+        };
+        self.popup = None;
+
+        if translation.is_empty() {
+            self.set_message("Translation is empty, not saved");
+            return Ok(());
+        }
+
+        let conn = self.open_db()?;
+        let trans_id = models::upsert_sentence_translation(
+            &conn,
+            text_id,
+            sentence_index as i64,
+            &sentence_text,
+            &translation,
+            None,
+            "user",
+            None,
+        )?;
+
+        // Create SRS sentence_full card if not exists
+        if !models::has_sentence_full_card(&conn, trans_id)? {
+            models::insert_sentence_full_card(&conn, trans_id)?;
+            self.set_message("Sentence translation saved + SRS card created");
+        } else {
+            self.set_message("Sentence translation updated");
+        }
+
+        // Update in-memory cache
+        if let Some(ref mut state) = self.reader_state {
+            if let Ok(Some(st)) =
+                models::get_sentence_translation(&conn, text_id, sentence_index as i64)
+            {
+                state.sentence_translations.insert(sentence_index, st);
+            }
+        }
+
+        Ok(())
+    }
+
+    // ─── Card Browser ────────────────────────────────────────────────────
+
+    /// Load the card browser screen.
+    pub fn load_card_browser(&mut self) -> Result<()> {
+        let conn = self.open_db()?;
+        let cards = models::get_all_srs_cards(&conn, 1000)?;
+        let now = chrono::Utc::now().naive_utc();
+
+        let mut entries: Vec<CardBrowserEntry> = Vec::new();
+        for card in cards {
+            let vocabulary = card
+                .vocabulary_id
+                .and_then(|vid| models::get_vocabulary_by_id(&conn, vid).ok().flatten());
+
+            let sentence_translation = card.sentence_translation_id.and_then(|stid| {
+                models::get_sentence_translation_by_id(&conn, stid)
+                    .ok()
+                    .flatten()
+            });
+
+            let display_front = if let Some(ref v) = vocabulary {
+                format!("{} ({})", v.base_form, v.reading)
+            } else if let Some(ref st) = sentence_translation {
+                let truncated: String = st.sentence_text.chars().take(40).collect();
+                if st.sentence_text.len() > 40 {
+                    format!("{}...", truncated)
+                } else {
+                    truncated
+                }
+            } else {
+                format!("Card #{}", card.id)
+            };
+
+            let display_back = if let Some(ref st) = sentence_translation {
+                st.translation.clone()
+            } else if let Some(ref v) = vocabulary {
+                v.translation.clone().unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            let due_label = {
+                let due =
+                    chrono::NaiveDateTime::parse_from_str(&card.due_date, "%Y-%m-%d %H:%M:%S")
+                        .unwrap_or(now);
+                if due <= now {
+                    "due now".to_string()
+                } else {
+                    let diff = due.signed_duration_since(now);
+                    let days = diff.num_days();
+                    let hours = diff.num_hours();
+                    if days > 0 {
+                        format!("in {}d", days)
+                    } else if hours > 0 {
+                        format!("in {}h", hours)
+                    } else {
+                        format!("in {}m", diff.num_minutes().max(1))
+                    }
+                }
+            };
+
+            entries.push(CardBrowserEntry {
+                card,
+                vocabulary,
+                sentence_translation,
+                display_front,
+                display_back,
+                due_label,
+            });
+        }
+
+        let selected = self
+            .card_browser_state
+            .as_ref()
+            .map(|s| s.selected.min(entries.len().saturating_sub(1)))
+            .unwrap_or(0);
+        let filter = self
+            .card_browser_state
+            .as_ref()
+            .map(|s| s.filter.clone())
+            .unwrap_or(CardBrowserFilter::All);
+        let sort = self
+            .card_browser_state
+            .as_ref()
+            .map(|s| s.sort.clone())
+            .unwrap_or(CardBrowserSort::DueDate);
+
+        self.card_browser_state = Some(CardBrowserState {
+            entries,
+            selected,
+            scroll_offset: 0,
+            filter,
+            sort,
+        });
+        self.previous_screen = Some(self.screen.clone());
+        self.screen = Screen::CardBrowser;
+        Ok(())
+    }
+
+    /// Get filtered entries for the card browser.
+    pub fn card_browser_filtered_entries(&self) -> Vec<usize> {
+        let state = match self.card_browser_state.as_ref() {
+            Some(s) => s,
+            None => return vec![],
+        };
+        state
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| match &state.filter {
+                CardBrowserFilter::All => true,
+                CardBrowserFilter::DueNow => {
+                    let now = chrono::Utc::now().naive_utc();
+                    chrono::NaiveDateTime::parse_from_str(&entry.card.due_date, "%Y-%m-%d %H:%M:%S")
+                        .map(|d| d <= now)
+                        .unwrap_or(true)
+                        && entry.card.state != "retired"
+                }
+                CardBrowserFilter::WordCards => entry.card.card_type == "word",
+                CardBrowserFilter::SentenceCards => entry.card.card_type == "sentence",
+                CardBrowserFilter::New => entry.card.state == "new",
+                CardBrowserFilter::Learning => entry.card.state == "learning",
+                CardBrowserFilter::Review => entry.card.state == "review",
+                CardBrowserFilter::Retired => entry.card.state == "retired",
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    // ─── Settings ────────────────────────────────────────────────────────
+
+    /// Load the settings screen.
+    pub fn load_settings(&mut self) {
+        let srs = &self.config.srs;
+        let reader = &self.config.reader;
+
+        let categories = vec![
+            SettingsCategory {
+                name: "Reader".to_string(),
+                items: vec![
+                    SettingsItem {
+                        key: "reader.sidebar_width".to_string(),
+                        label: "Sidebar width (%)".to_string(),
+                        description: "Percentage of screen for sidebar".to_string(),
+                        value: SettingsValue::Integer(reader.sidebar_width as i64),
+                    },
+                    SettingsItem {
+                        key: "reader.furigana".to_string(),
+                        label: "Show furigana".to_string(),
+                        description: "Display furigana above kanji".to_string(),
+                        value: SettingsValue::Bool(reader.furigana),
+                    },
+                    SettingsItem {
+                        key: "reader.preprocess_ahead".to_string(),
+                        label: "Preprocess ahead".to_string(),
+                        description: "Chapters to preprocess ahead".to_string(),
+                        value: SettingsValue::Integer(reader.preprocess_ahead as i64),
+                    },
+                ],
+            },
+            SettingsCategory {
+                name: "SRS".to_string(),
+                items: vec![
+                    SettingsItem {
+                        key: "srs.default_answer_mode".to_string(),
+                        label: "Default answer mode".to_string(),
+                        description: "Default review mode for new cards".to_string(),
+                        value: SettingsValue::Choice(
+                            srs.default_answer_mode.clone(),
+                            vec![
+                                "meaning_recall".to_string(),
+                                "reading_recall".to_string(),
+                                "typed_reading".to_string(),
+                                "sentence_cloze".to_string(),
+                                "sentence_full".to_string(),
+                            ],
+                        ),
+                    },
+                    SettingsItem {
+                        key: "srs.new_cards_per_day".to_string(),
+                        label: "New cards per day".to_string(),
+                        description: "Max new cards introduced per session".to_string(),
+                        value: SettingsValue::Integer(srs.new_cards_per_day as i64),
+                    },
+                    SettingsItem {
+                        key: "srs.max_reviews_per_session".to_string(),
+                        label: "Max reviews per session".to_string(),
+                        description: "0 = unlimited".to_string(),
+                        value: SettingsValue::Integer(srs.max_reviews_per_session as i64),
+                    },
+                    SettingsItem {
+                        key: "srs.review_order".to_string(),
+                        label: "Review order".to_string(),
+                        description: "Order of cards in review session".to_string(),
+                        value: SettingsValue::Choice(
+                            srs.review_order.clone(),
+                            vec!["due_first".to_string(), "random".to_string()],
+                        ),
+                    },
+                    SettingsItem {
+                        key: "srs.review_word_cards".to_string(),
+                        label: "Review word cards".to_string(),
+                        description: "Include word cards in review".to_string(),
+                        value: SettingsValue::Bool(self.config.srs.review_word_cards),
+                    },
+                    SettingsItem {
+                        key: "srs.review_sentence_cloze_cards".to_string(),
+                        label: "Review sentence cloze cards".to_string(),
+                        description: "Include sentence cloze in review".to_string(),
+                        value: SettingsValue::Bool(self.config.srs.review_sentence_cloze_cards),
+                    },
+                    SettingsItem {
+                        key: "srs.review_sentence_full_cards".to_string(),
+                        label: "Review sentence full cards".to_string(),
+                        description: "Include sentence full in review".to_string(),
+                        value: SettingsValue::Bool(self.config.srs.review_sentence_full_cards),
+                    },
+                ],
+            },
+        ];
+
+        self.settings_state = Some(SettingsState {
+            categories,
+            selected_category: 0,
+            selected_item: 0,
+            editing: false,
+            edit_buffer: String::new(),
+            dirty: false,
+        });
+        self.previous_screen = Some(self.screen.clone());
+        self.screen = Screen::Settings;
+    }
+
+    /// Apply settings changes back to the config and optionally save to file.
+    pub fn apply_settings(&mut self) -> Result<()> {
+        let state = match self.settings_state.as_ref() {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+
+        for cat in &state.categories {
+            for item in &cat.items {
+                match item.key.as_str() {
+                    "reader.sidebar_width" => {
+                        if let SettingsValue::Integer(v) = &item.value {
+                            self.config.reader.sidebar_width = (*v).max(10).min(80) as u16;
+                        }
+                    }
+                    "reader.furigana" => {
+                        if let SettingsValue::Bool(v) = &item.value {
+                            self.config.reader.furigana = *v;
+                        }
+                    }
+                    "reader.preprocess_ahead" => {
+                        if let SettingsValue::Integer(v) = &item.value {
+                            self.config.reader.preprocess_ahead = (*v).max(0).min(20) as usize;
+                        }
+                    }
+                    "srs.default_answer_mode" => {
+                        if let SettingsValue::Choice(v, _) = &item.value {
+                            self.config.srs.default_answer_mode = v.clone();
+                        } else if let SettingsValue::Text(v) = &item.value {
+                            self.config.srs.default_answer_mode = v.clone();
+                        }
+                    }
+                    "srs.new_cards_per_day" => {
+                        if let SettingsValue::Integer(v) = &item.value {
+                            self.config.srs.new_cards_per_day = (*v).max(0) as u32;
+                        }
+                    }
+                    "srs.max_reviews_per_session" => {
+                        if let SettingsValue::Integer(v) = &item.value {
+                            self.config.srs.max_reviews_per_session = (*v).max(0) as u32;
+                        }
+                    }
+                    "srs.review_order" => {
+                        if let SettingsValue::Choice(v, _) = &item.value {
+                            self.config.srs.review_order = v.clone();
+                        } else if let SettingsValue::Text(v) = &item.value {
+                            self.config.srs.review_order = v.clone();
+                        }
+                    }
+                    "srs.review_word_cards" => {
+                        if let SettingsValue::Bool(v) = &item.value {
+                            self.config.srs.review_word_cards = *v;
+                        }
+                    }
+                    "srs.review_sentence_cloze_cards" => {
+                        if let SettingsValue::Bool(v) = &item.value {
+                            self.config.srs.review_sentence_cloze_cards = *v;
+                        }
+                    }
+                    "srs.review_sentence_full_cards" => {
+                        if let SettingsValue::Bool(v) = &item.value {
+                            self.config.srs.review_sentence_full_cards = *v;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Save config to TOML file
+        crate::config::save_config(&self.config)?;
+        self.set_message("Settings saved");
         Ok(())
     }
 }

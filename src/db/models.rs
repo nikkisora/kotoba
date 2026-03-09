@@ -43,6 +43,7 @@ pub enum AnswerMode {
     ReadingRecall,
     TypedReading,
     SentenceCloze,
+    SentenceFull,
 }
 
 // ─── Models ──────────────────────────────────────────────────────────
@@ -138,6 +139,7 @@ pub struct Vocabulary {
     pub pos: String,
     pub status: VocabularyStatus,
     pub notes: Option<String>,
+    pub translation: Option<String>,
     pub first_seen_at: String,
     pub updated_at: String,
 }
@@ -152,6 +154,7 @@ impl Vocabulary {
             pos: row.get("pos")?,
             status: VocabularyStatus::from_i32(status_val),
             notes: row.get("notes")?,
+            translation: row.get("translation").unwrap_or(None),
             first_seen_at: row.get("first_seen_at")?,
             updated_at: row.get("updated_at")?,
         })
@@ -185,6 +188,7 @@ pub struct SrsCard {
     pub lapses: i32,
     pub state: String,
     pub created_at: String,
+    pub sentence_translation_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -835,6 +839,7 @@ impl SrsCard {
             lapses: row.get("lapses")?,
             state: row.get("state")?,
             created_at: row.get("created_at")?,
+            sentence_translation_id: row.get("sentence_translation_id").unwrap_or(None),
         })
     }
 }
@@ -875,6 +880,7 @@ impl AnswerMode {
             AnswerMode::ReadingRecall => "reading_recall",
             AnswerMode::TypedReading => "typed_reading",
             AnswerMode::SentenceCloze => "sentence_cloze",
+            AnswerMode::SentenceFull => "sentence_full",
         }
     }
     pub fn from_str(s: &str) -> Self {
@@ -882,6 +888,7 @@ impl AnswerMode {
             "reading_recall" => AnswerMode::ReadingRecall,
             "typed_reading" => AnswerMode::TypedReading,
             "sentence_cloze" => AnswerMode::SentenceCloze,
+            "sentence_full" => AnswerMode::SentenceFull,
             _ => AnswerMode::MeaningRecall,
         }
     }
@@ -891,6 +898,27 @@ impl AnswerMode {
             AnswerMode::ReadingRecall => "Reading Recall",
             AnswerMode::TypedReading => "Typed Reading",
             AnswerMode::SentenceCloze => "Sentence Cloze",
+            AnswerMode::SentenceFull => "Sentence Full",
+        }
+    }
+    /// Get all possible answer mode variants.
+    pub fn all_variants() -> &'static [AnswerMode] {
+        &[
+            AnswerMode::MeaningRecall,
+            AnswerMode::ReadingRecall,
+            AnswerMode::TypedReading,
+            AnswerMode::SentenceCloze,
+            AnswerMode::SentenceFull,
+        ]
+    }
+    /// Cycle to the next answer mode variant.
+    pub fn next(&self) -> Self {
+        match self {
+            AnswerMode::MeaningRecall => AnswerMode::ReadingRecall,
+            AnswerMode::ReadingRecall => AnswerMode::TypedReading,
+            AnswerMode::TypedReading => AnswerMode::SentenceCloze,
+            AnswerMode::SentenceCloze => AnswerMode::SentenceFull,
+            AnswerMode::SentenceFull => AnswerMode::MeaningRecall,
         }
     }
 }
@@ -1149,6 +1177,176 @@ pub fn list_user_expressions(conn: &Connection) -> Result<Vec<UserExpression>> {
 /// Delete a user expression by id.
 pub fn delete_user_expression(conn: &Connection, id: i64) -> Result<()> {
     conn.execute("DELETE FROM user_expressions WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+// ─── Sentence Translation Model & CRUD ───────────────────────────────
+
+/// A sentence translation (user-provided, LLM, or API).
+#[derive(Debug, Clone)]
+pub struct SentenceTranslation {
+    pub id: i64,
+    pub text_id: i64,
+    pub sentence_index: i64,
+    pub sentence_text: String,
+    pub translation: String,
+    pub explanation: Option<String>,
+    pub source: String,
+    pub model: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl SentenceTranslation {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            text_id: row.get("text_id")?,
+            sentence_index: row.get("sentence_index")?,
+            sentence_text: row.get("sentence_text")?,
+            translation: row.get("translation")?,
+            explanation: row.get("explanation")?,
+            source: row.get("source")?,
+            model: row.get("model")?,
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+        })
+    }
+}
+
+/// Upsert a sentence translation. Returns the id.
+pub fn upsert_sentence_translation(
+    conn: &Connection,
+    text_id: i64,
+    sentence_index: i64,
+    sentence_text: &str,
+    translation: &str,
+    explanation: Option<&str>,
+    source: &str,
+    model: Option<&str>,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO sentence_translations (text_id, sentence_index, sentence_text, translation, explanation, source, model)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(text_id, sentence_index) DO UPDATE SET
+             translation = excluded.translation,
+             explanation = excluded.explanation,
+             source = excluded.source,
+             model = excluded.model,
+             updated_at = datetime('now')",
+        params![text_id, sentence_index, sentence_text, translation, explanation, source, model],
+    )?;
+    let id = conn.query_row(
+        "SELECT id FROM sentence_translations WHERE text_id = ?1 AND sentence_index = ?2",
+        params![text_id, sentence_index],
+        |row| row.get(0),
+    )?;
+    Ok(id)
+}
+
+/// Get all sentence translations for a text.
+pub fn get_sentence_translations(
+    conn: &Connection,
+    text_id: i64,
+) -> Result<Vec<SentenceTranslation>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM sentence_translations WHERE text_id = ?1 ORDER BY sentence_index",
+    )?;
+    let rows = stmt.query_map(params![text_id], SentenceTranslation::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Get a sentence translation by text_id and sentence_index.
+pub fn get_sentence_translation(
+    conn: &Connection,
+    text_id: i64,
+    sentence_index: i64,
+) -> Result<Option<SentenceTranslation>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM sentence_translations WHERE text_id = ?1 AND sentence_index = ?2",
+    )?;
+    let mut rows = stmt.query_map(
+        params![text_id, sentence_index],
+        SentenceTranslation::from_row,
+    )?;
+    Ok(rows.next().transpose()?)
+}
+
+/// Update vocabulary translation.
+pub fn update_vocabulary_translation(
+    conn: &Connection,
+    id: i64,
+    translation: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE vocabulary SET translation = ?1, updated_at = datetime('now') WHERE id = ?2",
+        params![translation, id],
+    )?;
+    Ok(())
+}
+
+/// Insert an SRS card for a sentence translation. Returns the card id.
+pub fn insert_sentence_full_card(conn: &Connection, sentence_translation_id: i64) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO srs_cards (vocabulary_id, card_type, answer_mode, sentence_translation_id, due_date, state)
+         VALUES (NULL, 'sentence', 'sentence_full', ?1, datetime('now'), 'new')",
+        params![sentence_translation_id],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Check if a sentence_full card already exists for a sentence translation.
+pub fn has_sentence_full_card(conn: &Connection, sentence_translation_id: i64) -> Result<bool> {
+    let count: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM srs_cards WHERE sentence_translation_id = ?1 AND answer_mode = 'sentence_full' AND state != 'retired'",
+        params![sentence_translation_id],
+        |r| r.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// Get a sentence translation by id.
+pub fn get_sentence_translation_by_id(
+    conn: &Connection,
+    id: i64,
+) -> Result<Option<SentenceTranslation>> {
+    let mut stmt = conn.prepare("SELECT * FROM sentence_translations WHERE id = ?1")?;
+    let mut rows = stmt.query_map(params![id], SentenceTranslation::from_row)?;
+    Ok(rows.next().transpose()?)
+}
+
+/// Get all SRS cards (for card browser). Includes retired cards.
+pub fn get_all_srs_cards(conn: &Connection, limit: usize) -> Result<Vec<SrsCard>> {
+    let mut stmt = conn.prepare("SELECT * FROM srs_cards ORDER BY due_date ASC LIMIT ?1")?;
+    let rows = stmt.query_map(params![limit as i64], SrsCard::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Update the answer_mode of an SRS card.
+pub fn update_card_answer_mode(conn: &Connection, card_id: i64, answer_mode: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE srs_cards SET answer_mode = ?1 WHERE id = ?2",
+        params![answer_mode, card_id],
+    )?;
+    Ok(())
+}
+
+/// Reset an SRS card to new state with due_date = now.
+pub fn reset_srs_card(conn: &Connection, card_id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE srs_cards SET state = 'new', stability = 0.0, difficulty = 0.0, reps = 0, lapses = 0, due_date = datetime('now') WHERE id = ?1",
+        params![card_id],
+    )?;
+    Ok(())
+}
+
+/// Delete an SRS card permanently.
+pub fn delete_srs_card(conn: &Connection, card_id: i64) -> Result<()> {
+    conn.execute(
+        "DELETE FROM srs_reviews WHERE card_id = ?1",
+        params![card_id],
+    )?;
+    conn.execute("DELETE FROM srs_cards WHERE id = ?1", params![card_id])?;
     Ok(())
 }
 

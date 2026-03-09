@@ -270,6 +270,36 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
         CREATE UNIQUE INDEX IF NOT EXISTS idx_user_expr_surface ON user_expressions(surface);
         "#,
     ),
+    (
+        17,
+        "Add translation column to vocabulary for user-provided word translations",
+        r#"
+        ALTER TABLE vocabulary ADD COLUMN translation TEXT DEFAULT NULL;
+        "#,
+    ),
+    (
+        18,
+        "Create sentence_translations table and add sentence_translation_id to srs_cards",
+        r#"
+        CREATE TABLE IF NOT EXISTS sentence_translations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text_id INTEGER NOT NULL REFERENCES texts(id) ON DELETE CASCADE,
+            sentence_index INTEGER NOT NULL,
+            sentence_text TEXT NOT NULL,
+            translation TEXT NOT NULL DEFAULT '',
+            explanation TEXT,
+            source TEXT NOT NULL DEFAULT 'user',
+            model TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sentence_trans
+            ON sentence_translations(text_id, sentence_index);
+
+        ALTER TABLE srs_cards ADD COLUMN sentence_translation_id INTEGER DEFAULT NULL
+            REFERENCES sentence_translations(id);
+        "#,
+    ),
 ];
 
 /// Run all pending migrations.
@@ -320,6 +350,6 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 16);
+        assert_eq!(version, 18);
     }
 }

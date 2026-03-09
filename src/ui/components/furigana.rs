@@ -191,6 +191,17 @@ fn build_slots(
     slots
 }
 
+/// Returns true if the sentence would use furigana (i.e., any slot needs furigana).
+/// Used by the reader to decide whether to add inter-sentence spacing.
+pub fn sentence_has_furigana(
+    tokens: &[TokenDisplay],
+    show_furigana: bool,
+    force_all_furigana: bool,
+) -> bool {
+    let slots = build_slots(tokens, show_furigana, force_all_furigana);
+    slots.iter().any(|s| s.needs_furigana)
+}
+
 /// Compute the exact height (in terminal rows) a sentence would occupy when rendered.
 /// Uses the same layout algorithm as `render_sentence` but without writing to a buffer.
 pub fn sentence_height(

@@ -81,6 +81,23 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
 
     let mut lines: Vec<Line> = Vec::new();
 
+    // Show sentence translation if available
+    if let Some(trans) = state.sentence_translations.get(&state.sentence_index) {
+        if !trans.translation.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Translation:",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                &trans.translation,
+                Style::default().fg(Color::Green),
+            )));
+            lines.push(Line::from(""));
+        }
+    }
+
     // Separator
     lines.push(Line::from(Span::styled(
         "Words:",
@@ -178,8 +195,15 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
             String::new()
         };
 
-        // Show MWE gloss if available, otherwise use single-word gloss
-        let gloss_part = if !token.mwe_gloss.is_empty() {
+        // Show user translation (green) > MWE gloss > JMdict gloss
+        let key = (token.base_form.clone(), token.reading.clone());
+        let user_translation = state
+            .vocabulary_cache
+            .get(&key)
+            .and_then(|v| v.translation.as_ref());
+        let gloss_part = if let Some(trans) = user_translation {
+            format!(" = {}", trans)
+        } else if !token.mwe_gloss.is_empty() {
             format!(" = {}", token.mwe_gloss)
         } else if !token.short_gloss.is_empty() {
             format!(" = {}", token.short_gloss)

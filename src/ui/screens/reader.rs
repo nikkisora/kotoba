@@ -103,6 +103,15 @@ pub fn render(frame: &mut Frame, app: &App) {
         Span::styled("[w] ", Style::default().fg(Color::DarkGray))
     };
 
+    let translation_indicator = if state
+        .sentence_translations
+        .contains_key(&state.sentence_index)
+    {
+        Span::styled("[翻] ", Style::default().fg(Color::Green))
+    } else {
+        Span::raw("")
+    };
+
     let status = Line::from(vec![
         Span::styled(
             format!(" {} {} ", sentence_info, word_info),
@@ -111,8 +120,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         autopromote_indicator,
         readings_indicator,
         known_indicator,
+        translation_indicator,
         Span::styled(
-            " ↑↓:sentence ←→:word 1-5:status i:ignore Enter:detail c:copy m:expr ",
+            " ↑↓:sent ←→:word 1-5:status t:translate T:sent-trans m:expr ",
             Style::default().fg(Color::DarkGray),
         ),
     ]);
@@ -139,9 +149,10 @@ fn render_main_text(frame: &mut Frame, app: &App, state: &crate::app::ReaderStat
     // as render_sentence to find the correct scroll offset.
     let show_furigana = app.config.reader.furigana;
 
-    // Compute exact heights: paragraph gaps stored separately from sentence heights.
+    // Compute exact heights: paragraph gaps and sentence gaps stored separately.
     let mut sentence_heights: Vec<u16> = Vec::new();
     let mut para_gaps: Vec<u16> = Vec::new(); // gap BEFORE each sentence (0 or 1)
+    let mut sent_gaps: Vec<u16> = Vec::new(); // spacing gap AFTER each sentence (0 or 1)
     let mut prev_para: Option<usize> = None;
 
     for (sent_idx, sentence) in state.sentences.iter().enumerate() {
@@ -165,14 +176,33 @@ fn render_main_text(frame: &mut Frame, app: &App, state: &crate::app::ReaderStat
             false,
         );
 
+        // Add 1-row gap after this sentence when the NEXT sentence does NOT have
+        // furigana. A furigana sentence starts with a furigana row (small text)
+        // which already provides visual separation. Non-furigana sentences need
+        // an explicit gap to avoid text lines being packed together.
+        let next_has_furi = if sent_idx + 1 < state.sentences.len() {
+            furigana::sentence_has_furigana(
+                &state.sentences[sent_idx + 1].tokens,
+                show_furigana,
+                false,
+            )
+        } else {
+            true // no next sentence → no gap needed
+        };
+        let spacing: u16 = if !next_has_furi { 1 } else { 0 };
+        sent_gaps.push(spacing);
+
         sentence_heights.push(h);
         prev_para = Some(sentence.paragraph_idx);
     }
 
     // Find scroll offset to center current sentence
-    let total_height: u16 = sentence_heights.iter().sum::<u16>() + para_gaps.iter().sum::<u16>();
+    let total_height: u16 = sentence_heights.iter().sum::<u16>()
+        + para_gaps.iter().sum::<u16>()
+        + sent_gaps.iter().sum::<u16>();
     let current_y: u16 = sentence_heights[..state.sentence_index].iter().sum::<u16>()
-        + para_gaps[..state.sentence_index].iter().sum::<u16>();
+        + para_gaps[..state.sentence_index].iter().sum::<u16>()
+        + sent_gaps[..state.sentence_index].iter().sum::<u16>();
     let current_h = sentence_heights[state.sentence_index];
 
     let target_y = if total_height <= inner.height {
@@ -195,6 +225,7 @@ fn render_main_text(frame: &mut Frame, app: &App, state: &crate::app::ReaderStat
         // Skip if entirely above view
         if y_pos + h as i32 <= 0 {
             y_pos += h as i32;
+            y_pos += sent_gaps[sent_idx] as i32;
             continue;
         }
 
@@ -256,5 +287,8 @@ fn render_main_text(frame: &mut Frame, app: &App, state: &crate::app::ReaderStat
         }
 
         y_pos += h as i32;
+
+        // Add sentence spacing gap (for non-furigana sentences)
+        y_pos += sent_gaps[sent_idx] as i32;
     }
 }

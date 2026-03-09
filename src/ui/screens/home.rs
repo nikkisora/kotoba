@@ -181,7 +181,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     // Status bar
     let status = Line::from(vec![Span::styled(
-        " ↑↓:navigate  Enter:open  r:review  f:toggle finished  l:library  i:import  Tab:reader  q:quit  ?:help ",
+        " ↑↓:navigate  Enter:open  r:review  c:cards  s:settings  f:finished  l:library  i:import  Tab:reader  q:quit ",
         Style::default().fg(Color::DarkGray),
     )]);
     frame.render_widget(
