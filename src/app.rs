@@ -579,10 +579,12 @@ impl App {
                 has_next,
             } => {
                 // Refresh chapter list if we're viewing this source
-                if let Screen::ChapterSelect { source_id: sid } = &self.screen {
-                    if *sid == source_id {
-                        // Reload chapters from DB to pick up newly saved ones
-                        let _ = self.load_chapter_select(source_id);
+                if let Screen::ChapterSelect { source_id: sid } = &mut self.screen {
+                    if *sid == source_id || *sid == -1 {
+                        // Update placeholder sentinel to the real source_id
+                        *sid = source_id;
+                        // Reload chapters from DB without triggering auto-refresh
+                        let _ = self.refresh_chapter_list(source_id);
                         // Keep loading state if more pages are coming
                         if let Some(cs) = self.chapter_select_state.as_mut() {
                             cs.loading = has_next;
@@ -599,9 +601,13 @@ impl App {
             ImportEvent::NovelInfoLoaded { source_id, title } => {
                 self.set_message(format!("Loaded: {}", title));
                 // Mark loading as done and do a final refresh
-                if let Screen::ChapterSelect { source_id: sid } = &self.screen {
-                    if *sid == source_id {
-                        let _ = self.load_chapter_select(source_id);
+                if let Screen::ChapterSelect { source_id: sid } = &mut self.screen {
+                    if *sid == source_id || *sid == -1 {
+                        // Update placeholder sentinel to the real source_id
+                        *sid = source_id;
+                        // Use refresh_chapter_list to avoid spawning duplicate
+                        // refresh threads — the initial fetch just completed
+                        let _ = self.refresh_chapter_list(source_id);
                         if let Some(cs) = self.chapter_select_state.as_mut() {
                             cs.loading = false;
                         }
@@ -1474,6 +1480,69 @@ impl App {
         } else {
             anyhow::bail!("Background importer not initialized");
         }
+        Ok(())
+    }
+
+    /// Reload just the chapter list data from DB without triggering
+    /// auto-refresh or preprocessing. Used during incremental page loading
+    /// to avoid spawning duplicate background threads.
+    fn refresh_chapter_list(&mut self, source_id: i64) -> Result<()> {
+        let conn = self.open_db()?;
+        let source = models::get_web_source_by_id(&conn, source_id)?
+            .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
+        let chapters = models::list_chapters_by_source(&conn, source_id)?;
+        let (total, imported, skipped) = models::get_source_chapter_counts(&conn, source_id)?;
+
+        // Build reading state map for chapters with text_ids
+        let mut chapter_read_states = HashMap::new();
+        for ch in &chapters {
+            if ch.is_skipped {
+                continue;
+            }
+            if let Some(text_id) = ch.text_id {
+                let text = models::get_text_by_id(&conn, text_id)?;
+                let state = match text {
+                    Some(t) => {
+                        if t.total_sentences == 0 {
+                            ChapterReadState::Unread
+                        } else if t.last_sentence_index >= t.total_sentences - 1 {
+                            ChapterReadState::Finished
+                        } else if t.last_sentence_index > 0 {
+                            ChapterReadState::InProgress
+                        } else {
+                            ChapterReadState::Unread
+                        }
+                    }
+                    None => ChapterReadState::NotImported,
+                };
+                chapter_read_states.insert(ch.id, state);
+            } else {
+                chapter_read_states.insert(ch.id, ChapterReadState::NotImported);
+            }
+        }
+
+        let page_size = chapter_page_size_for_terminal();
+        let selected = self
+            .chapter_select_state
+            .as_ref()
+            .filter(|s| s.source.id == source_id)
+            .map(|s| s.selected.min(chapters.len().saturating_sub(1)))
+            .unwrap_or(0);
+        let page_start = (selected / page_size) * page_size;
+
+        self.chapter_select_state = Some(ChapterSelectState {
+            source,
+            chapters,
+            selected,
+            page_start,
+            page_size,
+            total_chapters: total,
+            total_imported: imported,
+            total_skipped: skipped,
+            loading: false,
+            chapter_read_states,
+        });
+        self.screen = Screen::ChapterSelect { source_id };
         Ok(())
     }
 
