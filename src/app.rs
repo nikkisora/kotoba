@@ -7,7 +7,9 @@ use crate::config::AppConfig;
 use crate::core::dictionary::{self, DictEntry};
 use crate::core::srs::{Rating, SrsEngine};
 use crate::core::tokenizer::{self, GroupToken};
-use crate::db::models::{self, AnswerMode, SrsCard, TextStats, Vocabulary, VocabularyStatus};
+use crate::db::models::{
+    self, AnswerMode, CardType, SrsCard, TextStats, Vocabulary, VocabularyStatus,
+};
 
 /// Compute a reasonable page_size for chapter select based on terminal height.
 /// Layout: 1 title bar + 4 source info + 2 list borders + 1 status bar = 8 fixed rows.
@@ -418,7 +420,9 @@ pub struct ReviewCardData {
     pub sentence_tokens: Vec<TokenDisplay>,
     /// Sentence text.
     pub sentence_text: String,
-    /// Answer mode for this card.
+    /// Card type from DB.
+    pub card_type: CardType,
+    /// Presentation mode for this review (determined at review time from card_type + settings).
     pub answer_mode: AnswerMode,
     /// Full display surface (compound surface for groups, e.g. "食べられない").
     /// Falls back to vocabulary.base_form for standalone words.
@@ -543,7 +547,10 @@ impl CardBrowserSort {
 pub struct CardBrowserState {
     pub entries: Vec<CardBrowserEntry>,
     pub selected: usize,
-    pub scroll_offset: usize,
+    /// Index of the first item visible on the current page.
+    pub page_start: usize,
+    /// Number of data rows visible on the current page (set by renderer).
+    pub page_size: usize,
     pub filter: CardBrowserFilter,
     pub sort: CardBrowserSort,
 }
@@ -917,14 +924,7 @@ impl App {
         // being filtered out, and card type filter settings).
         let due_card_counts = if let Some(ref srs) = self.srs_engine {
             let cards = srs
-                .get_due_cards(
-                    &conn,
-                    9999,
-                    self.config.srs.review_word_cards,
-                    self.config.srs.review_sentence_cloze_cards,
-                    self.config.srs.review_sentence_full_cards,
-                    self.config.srs.new_cards_per_day,
-                )
+                .get_due_cards(&conn, 9999, self.config.srs.new_cards_per_day)
                 .unwrap_or_default();
             let new_count = cards.iter().filter(|c| c.state == "new").count();
             (cards.len(), new_count)
@@ -1276,11 +1276,35 @@ impl App {
 
         // Auto-create or retire SRS cards based on new status
         if let Some(ref srs) = self.srs_engine {
-            if let Err(e) =
-                srs.on_status_change(&conn, vid, status, &self.config.srs.default_answer_mode)
-            {
+            if let Err(e) = srs.on_status_change(&conn, vid, status) {
                 // Log but don't fail — SRS is secondary to vocabulary tracking
                 self.set_message(format!("SRS card error: {}", e));
+            }
+        }
+
+        // Collect current sentence context for the vocabulary item
+        if matches!(
+            status,
+            VocabularyStatus::Learning1
+                | VocabularyStatus::Learning2
+                | VocabularyStatus::Learning3
+                | VocabularyStatus::Learning4
+        ) {
+            if let Some(ref state) = self.reader_state {
+                let sentence = &state.sentences[state.sentence_index];
+                // Find the paragraph_id and sentence_index from DB tokens
+                let para = &state.paragraphs[sentence.paragraph_idx];
+                if let Some(db_tok) = para.db_tokens.iter().find(|t| {
+                    t.sentence_index
+                        == para
+                            .db_tokens
+                            .get(sentence.start_token)
+                            .map(|st| st.sentence_index)
+                            .unwrap_or(-1)
+                }) {
+                    let _ =
+                        models::add_vocabulary_sentence(&conn, vid, para.id, db_tok.sentence_index);
+                }
             }
         }
 
@@ -1327,6 +1351,62 @@ impl App {
             VocabularyStatus::Known => "Known",
         };
         self.set_message(format!("{} → {}", base_form, status_name));
+        Ok(())
+    }
+
+    /// Collect sentence contexts for all Learning words in the given sentence.
+    /// Called when advancing past a sentence so new context sentences are recorded.
+    pub fn collect_sentence_contexts(&mut self, sentence_index: usize) -> Result<()> {
+        let state = match self.reader_state.as_ref() {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+
+        if sentence_index >= state.sentences.len() {
+            return Ok(());
+        }
+
+        // Collect Learning words from this sentence (deduplicated)
+        let mut seen = std::collections::HashSet::new();
+        let mut to_collect: Vec<(String, String)> = Vec::new();
+        for token in &state.sentences[sentence_index].tokens {
+            if !token.is_navigable() {
+                continue;
+            }
+            if !matches!(
+                token.vocabulary_status,
+                VocabularyStatus::Learning1
+                    | VocabularyStatus::Learning2
+                    | VocabularyStatus::Learning3
+                    | VocabularyStatus::Learning4
+            ) {
+                continue;
+            }
+            let key = (token.base_form.clone(), token.reading.clone());
+            if seen.insert(key.clone()) {
+                to_collect.push(key);
+            }
+        }
+
+        if to_collect.is_empty() {
+            return Ok(());
+        }
+
+        let conn = self.open_db()?;
+        let sentence = &state.sentences[sentence_index];
+        let para = &state.paragraphs[sentence.paragraph_idx];
+        let sent_idx = para
+            .db_tokens
+            .get(sentence.start_token)
+            .map(|t| t.sentence_index)
+            .unwrap_or(0);
+
+        for (base_form, reading) in &to_collect {
+            if let Ok(vid) = models::upsert_vocabulary(&conn, base_form, reading, "") {
+                let _ = models::add_vocabulary_sentence(&conn, vid, para.id, sent_idx);
+            }
+        }
+
         Ok(())
     }
 
@@ -2184,14 +2264,7 @@ impl App {
             200 // reasonable batch limit
         };
 
-        let due_cards = srs.get_due_cards(
-            &conn,
-            limit,
-            self.config.srs.review_word_cards,
-            self.config.srs.review_sentence_cloze_cards,
-            self.config.srs.review_sentence_full_cards,
-            self.config.srs.new_cards_per_day,
-        )?;
+        let due_cards = srs.get_due_cards(&conn, limit, self.config.srs.new_cards_per_day)?;
 
         // Build vocabulary cache for sentence context rendering
         let mut vocabulary_cache = HashMap::new();
@@ -2209,13 +2282,15 @@ impl App {
         let mut gloss_cache: HashMap<String, String> = HashMap::new();
 
         // Build card data for each due card
+        let enable_cloze = self.config.srs.enable_sentence_cloze;
+        let cloze_ratio = self.config.srs.sentence_cloze_ratio.min(100);
         let user_expressions = models::list_user_expressions(&conn).unwrap_or_default();
         let mut queue: Vec<ReviewCardData> = Vec::new();
         for card in due_cards {
-            let answer_mode = AnswerMode::from_str(&card.answer_mode);
+            let card_type = CardType::from_str(&card.card_type);
 
             // Handle SentenceFull cards (no vocabulary, linked via sentence_translation_id)
-            if answer_mode == AnswerMode::SentenceFull {
+            if card.sentence_translation_id.is_some() && card_type == CardType::Sentence {
                 if let Some(st_id) = card.sentence_translation_id {
                     if let Ok(Some(st)) = models::get_sentence_translation_by_id(&conn, st_id) {
                         queue.push(ReviewCardData {
@@ -2234,7 +2309,8 @@ impl App {
                             definitions: vec![],
                             sentence_tokens: vec![],
                             sentence_text: st.sentence_text.clone(),
-                            answer_mode,
+                            card_type: CardType::Sentence,
+                            answer_mode: AnswerMode::SentenceFull,
                             display_surface: String::new(),
                             display_reading: String::new(),
                             target_group_id: None,
@@ -2257,8 +2333,22 @@ impl App {
             let definitions =
                 dictionary::lookup(&conn, &vocabulary.base_form, None).unwrap_or_default();
 
-            // Get sentence context tokens
-            let db_tokens = models::get_sentence_tokens_for_vocab(&conn, vocab_id)?;
+            // Determine answer mode for word cards
+            let answer_mode = if card_type == CardType::Word && enable_cloze {
+                // Randomly choose between word review and sentence cloze
+                use rand::Rng;
+                let mut rng = rand::thread_rng();
+                if rng.gen_range(0..100) < cloze_ratio {
+                    AnswerMode::SentenceCloze
+                } else {
+                    AnswerMode::WordReview
+                }
+            } else {
+                AnswerMode::WordReview
+            };
+
+            // Get sentence context tokens — use random sentence from collected sentences
+            let db_tokens = models::get_random_sentence_tokens_for_vocab(&conn, vocab_id)?;
             let sentence_text: String = db_tokens.iter().map(|t| t.surface.as_str()).collect();
 
             // Build TokenDisplay for sentence context
@@ -2380,6 +2470,7 @@ impl App {
                 definitions,
                 sentence_tokens,
                 sentence_text,
+                card_type,
                 answer_mode,
                 display_surface,
                 display_reading,
@@ -2429,11 +2520,9 @@ impl App {
             if !state.queue.is_empty() {
                 state.phase = ReviewPhase::ShowFront;
                 state.card_shown_at = Instant::now();
-                // For typed reading mode (or word cards when require_typed_input is on), go directly to typing
+                // For word cards when require_typed_input is on, go directly to typing
                 if let Some(card_data) = state.queue.get(state.current_index) {
-                    if card_data.answer_mode == AnswerMode::TypedReading
-                        || (require_typed && card_data.card.card_type == "word")
-                    {
+                    if require_typed && card_data.card_type == CardType::Word {
                         state.phase = ReviewPhase::TypingAnswer;
                     }
                 }
@@ -2548,9 +2637,7 @@ impl App {
                 // Show next card
                 state.card_shown_at = Instant::now();
                 let next_card = &state.queue[state.current_index];
-                let next_mode = next_card.answer_mode.clone();
-                let is_word_card = next_card.card.card_type == "word";
-                if next_mode == AnswerMode::TypedReading || (require_typed && is_word_card) {
+                if require_typed && next_card.card_type == CardType::Word {
                     state.phase = ReviewPhase::TypingAnswer;
                 } else {
                     state.phase = ReviewPhase::ShowFront;
@@ -2964,7 +3051,8 @@ impl App {
         self.card_browser_state = Some(CardBrowserState {
             entries,
             selected,
-            scroll_offset: 0,
+            page_start: 0,
+            page_size: 20, // updated by renderer each frame
             filter,
             sort,
         });
@@ -3027,6 +3115,12 @@ impl App {
                         value: SettingsValue::Bool(reader.furigana),
                     },
                     SettingsItem {
+                        key: "reader.sentence_gaps".to_string(),
+                        label: "Sentence gaps".to_string(),
+                        description: "Add a 1-row gap between sentences for readability".to_string(),
+                        value: SettingsValue::Bool(reader.sentence_gaps),
+                    },
+                    SettingsItem {
                         key: "reader.preprocess_ahead".to_string(),
                         label: "Preprocess ahead".to_string(),
                         description: "Chapters to preprocess ahead".to_string(),
@@ -3037,21 +3131,6 @@ impl App {
             SettingsCategory {
                 name: "SRS".to_string(),
                 items: vec![
-                    SettingsItem {
-                        key: "srs.default_answer_mode".to_string(),
-                        label: "Default answer mode".to_string(),
-                        description: "Default review mode for new cards".to_string(),
-                        value: SettingsValue::Choice(
-                            srs.default_answer_mode.clone(),
-                            vec![
-                                "meaning_recall".to_string(),
-                                "reading_recall".to_string(),
-                                "typed_reading".to_string(),
-                                "sentence_cloze".to_string(),
-                                "sentence_full".to_string(),
-                            ],
-                        ),
-                    },
                     SettingsItem {
                         key: "srs.new_cards_per_day".to_string(),
                         label: "New cards per day".to_string(),
@@ -3074,29 +3153,23 @@ impl App {
                         ),
                     },
                     SettingsItem {
-                        key: "srs.review_word_cards".to_string(),
-                        label: "Review word cards".to_string(),
-                        description: "Include word cards in review".to_string(),
-                        value: SettingsValue::Bool(self.config.srs.review_word_cards),
-                    },
-                    SettingsItem {
-                        key: "srs.review_sentence_cloze_cards".to_string(),
-                        label: "Review sentence cloze cards".to_string(),
-                        description: "Include sentence cloze in review".to_string(),
-                        value: SettingsValue::Bool(self.config.srs.review_sentence_cloze_cards),
-                    },
-                    SettingsItem {
-                        key: "srs.review_sentence_full_cards".to_string(),
-                        label: "Review sentence full cards".to_string(),
-                        description: "Include sentence full in review".to_string(),
-                        value: SettingsValue::Bool(self.config.srs.review_sentence_full_cards),
-                    },
-                    SettingsItem {
                         key: "srs.require_typed_input".to_string(),
                         label: "Require typed reading".to_string(),
                         description: "Type reading for word cards (accepts hiragana/romaji/kanji)"
                             .to_string(),
                         value: SettingsValue::Bool(self.config.srs.require_typed_input),
+                    },
+                    SettingsItem {
+                        key: "srs.enable_sentence_cloze".to_string(),
+                        label: "Blank-word sentence cards".to_string(),
+                        description: "Sometimes show the sentence with the word blanked out instead of the word itself".to_string(),
+                        value: SettingsValue::Bool(self.config.srs.enable_sentence_cloze),
+                    },
+                    SettingsItem {
+                        key: "srs.sentence_cloze_ratio".to_string(),
+                        label: "Blank-word chance (%)".to_string(),
+                        description: "How often to blank the word in the sentence (0=never, 100=always)".to_string(),
+                        value: SettingsValue::Integer(self.config.srs.sentence_cloze_ratio as i64),
                     },
                 ],
             },
@@ -3134,16 +3207,14 @@ impl App {
                             self.config.reader.furigana = *v;
                         }
                     }
+                    "reader.sentence_gaps" => {
+                        if let SettingsValue::Bool(v) = &item.value {
+                            self.config.reader.sentence_gaps = *v;
+                        }
+                    }
                     "reader.preprocess_ahead" => {
                         if let SettingsValue::Integer(v) = &item.value {
                             self.config.reader.preprocess_ahead = (*v).max(0).min(20) as usize;
-                        }
-                    }
-                    "srs.default_answer_mode" => {
-                        if let SettingsValue::Choice(v, _) = &item.value {
-                            self.config.srs.default_answer_mode = v.clone();
-                        } else if let SettingsValue::Text(v) = &item.value {
-                            self.config.srs.default_answer_mode = v.clone();
                         }
                     }
                     "srs.new_cards_per_day" => {
@@ -3163,24 +3234,19 @@ impl App {
                             self.config.srs.review_order = v.clone();
                         }
                     }
-                    "srs.review_word_cards" => {
-                        if let SettingsValue::Bool(v) = &item.value {
-                            self.config.srs.review_word_cards = *v;
-                        }
-                    }
-                    "srs.review_sentence_cloze_cards" => {
-                        if let SettingsValue::Bool(v) = &item.value {
-                            self.config.srs.review_sentence_cloze_cards = *v;
-                        }
-                    }
-                    "srs.review_sentence_full_cards" => {
-                        if let SettingsValue::Bool(v) = &item.value {
-                            self.config.srs.review_sentence_full_cards = *v;
-                        }
-                    }
                     "srs.require_typed_input" => {
                         if let SettingsValue::Bool(v) = &item.value {
                             self.config.srs.require_typed_input = *v;
+                        }
+                    }
+                    "srs.enable_sentence_cloze" => {
+                        if let SettingsValue::Bool(v) = &item.value {
+                            self.config.srs.enable_sentence_cloze = *v;
+                        }
+                    }
+                    "srs.sentence_cloze_ratio" => {
+                        if let SettingsValue::Integer(v) = &item.value {
+                            self.config.srs.sentence_cloze_ratio = (*v).max(0).min(100) as u32;
                         }
                     }
                     _ => {}

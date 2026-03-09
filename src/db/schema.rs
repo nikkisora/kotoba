@@ -300,6 +300,23 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
             REFERENCES sentence_translations(id);
         "#,
     ),
+    (
+        19,
+        "Create vocabulary_sentences table for tracking all sentences a word appears in",
+        r#"
+        CREATE TABLE IF NOT EXISTS vocabulary_sentences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vocabulary_id INTEGER NOT NULL REFERENCES vocabulary(id) ON DELETE CASCADE,
+            paragraph_id INTEGER NOT NULL REFERENCES paragraphs(id) ON DELETE CASCADE,
+            sentence_index INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_vocab_sent_unique
+            ON vocabulary_sentences(vocabulary_id, paragraph_id, sentence_index);
+        CREATE INDEX IF NOT EXISTS idx_vocab_sent_vocab_id
+            ON vocabulary_sentences(vocabulary_id);
+        "#,
+    ),
 ];
 
 /// Run all pending migrations.
@@ -350,6 +367,6 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 18);
+        assert_eq!(version, 19);
     }
 }

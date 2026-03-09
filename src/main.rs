@@ -246,7 +246,7 @@ fn run_tui(config: config::AppConfig) -> Result<()> {
 
     // Main event loop
     loop {
-        terminal.draw(|frame| ui::render(frame, &app))?;
+        terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         match events.next()? {
             Event::Key(key) => {
@@ -373,14 +373,46 @@ fn handle_card_browser_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut state) = app.card_browser_state {
-                state.selected = state.selected.saturating_sub(1);
+                if state.selected > 0 {
+                    state.selected -= 1;
+                    // Jump to previous page if we go above current page
+                    if state.selected < state.page_start {
+                        state.page_start = state.page_start.saturating_sub(state.page_size);
+                    }
+                }
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
             let filtered = app.card_browser_filtered_entries();
             let max = filtered.len().saturating_sub(1);
             if let Some(ref mut state) = app.card_browser_state {
-                state.selected = (state.selected + 1).min(max);
+                if state.selected < max {
+                    state.selected += 1;
+                    // Jump to next page if we go below current page
+                    if state.selected >= state.page_start + state.page_size {
+                        state.page_start += state.page_size;
+                    }
+                }
+            }
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            // Previous page
+            if let Some(ref mut state) = app.card_browser_state {
+                if state.page_start > 0 {
+                    state.page_start = state.page_start.saturating_sub(state.page_size);
+                    state.selected = state.page_start;
+                }
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            // Next page
+            let filtered_len = app.card_browser_filtered_entries().len();
+            if let Some(ref mut state) = app.card_browser_state {
+                let next_start = state.page_start + state.page_size;
+                if next_start < filtered_len {
+                    state.page_start = next_start;
+                    state.selected = next_start;
+                }
             }
         }
         KeyCode::Char('f') => {
@@ -388,42 +420,13 @@ fn handle_card_browser_key(app: &mut App, key: KeyEvent) {
             if let Some(ref mut state) = app.card_browser_state {
                 state.filter = state.filter.next();
                 state.selected = 0;
+                state.page_start = 0;
             }
         }
         KeyCode::Char('s') => {
             // Cycle sort
             if let Some(ref mut state) = app.card_browser_state {
                 state.sort = state.sort.next();
-            }
-        }
-        KeyCode::Char('m') => {
-            // Cycle answer mode for selected card
-            let card_info = {
-                let filtered = app.card_browser_filtered_entries();
-                app.card_browser_state.as_ref().and_then(|state| {
-                    filtered
-                        .get(state.selected)
-                        .and_then(|&idx| state.entries.get(idx))
-                        .map(|e| {
-                            let current = models::AnswerMode::from_str(&e.card.answer_mode);
-                            (e.card.id, current.next().as_str().to_string())
-                        })
-                })
-            };
-            if let Some((card_id, new_mode)) = card_info {
-                let conn = match app.open_db() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        app.set_message(format!("DB error: {}", e));
-                        return;
-                    }
-                };
-                if let Err(e) = models::update_card_answer_mode(&conn, card_id, &new_mode) {
-                    app.set_message(format!("Error: {}", e));
-                } else {
-                    app.set_message(format!("Answer mode → {}", new_mode));
-                    let _ = app.load_card_browser();
-                }
             }
         }
         KeyCode::Char('r') => {
@@ -1648,6 +1651,8 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                 result
             };
             if let Some((dep, is_at_end)) = departing {
+                // Collect sentence contexts for Learning words before autopromoting
+                let _ = app.collect_sentence_contexts(dep);
                 if let Err(e) = app.autopromote_sentence(dep) {
                     app.set_message(format!("Autopromote error: {}", e));
                 }
@@ -1744,6 +1749,8 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                 advanced_from
             };
             if let Some((dep, is_at_end)) = departing {
+                // Collect sentence contexts for Learning words before autopromoting
+                let _ = app.collect_sentence_contexts(dep);
                 if let Err(e) = app.autopromote_sentence(dep) {
                     app.set_message(format!("Autopromote error: {}", e));
                 }

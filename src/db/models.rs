@@ -37,12 +37,17 @@ pub enum CardType {
     Sentence,
 }
 
+/// Review presentation mode — determined at review time by card_type + settings.
+/// Word cards use WordReview (show word + context, recall reading + meaning).
+/// Sentence cards use SentenceFull (show sentence, recall translation).
+/// SentenceCloze is a random variant of word review when enabled in settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AnswerMode {
-    MeaningRecall,
-    ReadingRecall,
-    TypedReading,
+    /// Unified word review: show word + context sentence, recall reading + meaning.
+    WordReview,
+    /// Sentence cloze variant of word review: sentence with word blanked.
     SentenceCloze,
+    /// Full sentence review: show sentence, recall translation.
     SentenceFull,
 }
 
@@ -876,80 +881,40 @@ impl CardType {
 impl AnswerMode {
     pub fn as_str(&self) -> &'static str {
         match self {
-            AnswerMode::MeaningRecall => "meaning_recall",
-            AnswerMode::ReadingRecall => "reading_recall",
-            AnswerMode::TypedReading => "typed_reading",
+            AnswerMode::WordReview => "word_review",
             AnswerMode::SentenceCloze => "sentence_cloze",
             AnswerMode::SentenceFull => "sentence_full",
         }
     }
     pub fn from_str(s: &str) -> Self {
         match s {
-            "reading_recall" => AnswerMode::ReadingRecall,
-            "typed_reading" => AnswerMode::TypedReading,
             "sentence_cloze" => AnswerMode::SentenceCloze,
             "sentence_full" => AnswerMode::SentenceFull,
-            _ => AnswerMode::MeaningRecall,
+            // Map old modes to WordReview for backward compat
+            _ => AnswerMode::WordReview,
         }
     }
     pub fn label(&self) -> &'static str {
         match self {
-            AnswerMode::MeaningRecall => "Meaning Recall",
-            AnswerMode::ReadingRecall => "Reading Recall",
-            AnswerMode::TypedReading => "Typed Reading",
+            AnswerMode::WordReview => "Word Review",
             AnswerMode::SentenceCloze => "Sentence Cloze",
             AnswerMode::SentenceFull => "Sentence Full",
-        }
-    }
-    /// Get all possible answer mode variants.
-    pub fn all_variants() -> &'static [AnswerMode] {
-        &[
-            AnswerMode::MeaningRecall,
-            AnswerMode::ReadingRecall,
-            AnswerMode::TypedReading,
-            AnswerMode::SentenceCloze,
-            AnswerMode::SentenceFull,
-        ]
-    }
-    /// Cycle to the next answer mode variant.
-    pub fn next(&self) -> Self {
-        match self {
-            AnswerMode::MeaningRecall => AnswerMode::ReadingRecall,
-            AnswerMode::ReadingRecall => AnswerMode::TypedReading,
-            AnswerMode::TypedReading => AnswerMode::SentenceCloze,
-            AnswerMode::SentenceCloze => AnswerMode::SentenceFull,
-            AnswerMode::SentenceFull => AnswerMode::MeaningRecall,
         }
     }
 }
 
 /// Insert a new SRS card. Returns the card id.
-pub fn insert_srs_card(
-    conn: &Connection,
-    vocabulary_id: i64,
-    card_type: &CardType,
-    answer_mode: &AnswerMode,
-    sentence_context: Option<&str>,
-) -> Result<i64> {
+pub fn insert_srs_card(conn: &Connection, vocabulary_id: i64, card_type: &CardType) -> Result<i64> {
+    let answer_mode = match card_type {
+        CardType::Word => AnswerMode::WordReview,
+        CardType::Sentence => AnswerMode::SentenceFull,
+    };
     conn.execute(
         "INSERT INTO srs_cards (vocabulary_id, card_type, answer_mode, due_date, state)
          VALUES (?1, ?2, ?3, datetime('now'), 'new')",
         params![vocabulary_id, card_type.as_str(), answer_mode.as_str()],
     )?;
-    let card_id = conn.last_insert_rowid();
-
-    // Store sentence context as JSON in a separate column if needed
-    // For now, sentence cards store context via the vocabulary linkage
-    if let Some(ctx) = sentence_context {
-        // Store the sentence text alongside the card for cloze display
-        conn.execute(
-            "UPDATE srs_cards SET conjugation_id = NULL WHERE id = ?1",
-            params![card_id],
-        )?;
-        let _ = ctx; // sentence context stored via sentence_text if migration adds it
-    }
-
-    Ok(card_id)
+    Ok(conn.last_insert_rowid())
 }
 
 /// Check if a word card already exists for a vocabulary item.
@@ -1364,6 +1329,83 @@ pub fn delete_srs_card(conn: &Connection, card_id: i64) -> Result<()> {
     )?;
     conn.execute("DELETE FROM srs_cards WHERE id = ?1", params![card_id])?;
     Ok(())
+}
+
+// ─── Vocabulary Sentences CRUD ────────────────────────────────────────
+
+/// Add a sentence context to a vocabulary item (deduplicates automatically via UNIQUE index).
+pub fn add_vocabulary_sentence(
+    conn: &Connection,
+    vocabulary_id: i64,
+    paragraph_id: i64,
+    sentence_index: i32,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO vocabulary_sentences (vocabulary_id, paragraph_id, sentence_index)
+         VALUES (?1, ?2, ?3)",
+        params![vocabulary_id, paragraph_id, sentence_index],
+    )?;
+    Ok(())
+}
+
+/// Get a random sentence's tokens for a vocabulary item (from all collected sentences).
+/// Returns tokens from a randomly chosen sentence where the word appears.
+pub fn get_random_sentence_tokens_for_vocab(
+    conn: &Connection,
+    vocabulary_id: i64,
+) -> Result<Vec<Token>> {
+    // Pick a random sentence from the vocabulary_sentences table
+    let sentence_info: Option<(i64, i32)> = conn
+        .query_row(
+            "SELECT paragraph_id, sentence_index
+             FROM vocabulary_sentences
+             WHERE vocabulary_id = ?1
+             ORDER BY RANDOM()
+             LIMIT 1",
+            params![vocabulary_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok();
+
+    // Fall back to the old method if no collected sentences
+    let (paragraph_id, sentence_index) = match sentence_info {
+        Some(info) => info,
+        None => {
+            // Fallback: find from tokens table directly
+            let fallback: Option<(i64, i32)> = conn
+                .query_row(
+                    "SELECT t.paragraph_id, t.sentence_index
+                     FROM tokens t
+                     JOIN vocabulary v ON t.base_form = v.base_form AND t.reading = v.reading
+                     WHERE v.id = ?1
+                     ORDER BY t.id ASC
+                     LIMIT 1",
+                    params![vocabulary_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok();
+            match fallback {
+                Some(info) => info,
+                None => return Ok(vec![]),
+            }
+        }
+    };
+
+    let mut stmt = conn.prepare(
+        "SELECT * FROM tokens WHERE paragraph_id = ?1 AND sentence_index = ?2 ORDER BY position",
+    )?;
+    let rows = stmt.query_map(params![paragraph_id, sentence_index], Token::from_row)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Get the count of collected sentences for a vocabulary item.
+pub fn get_vocabulary_sentence_count(conn: &Connection, vocabulary_id: i64) -> Result<usize> {
+    let count: usize = conn.query_row(
+        "SELECT COUNT(*) FROM vocabulary_sentences WHERE vocabulary_id = ?1",
+        params![vocabulary_id],
+        |r| r.get(0),
+    )?;
+    Ok(count)
 }
 
 #[cfg(test)]

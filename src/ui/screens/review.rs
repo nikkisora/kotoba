@@ -151,8 +151,8 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect) {
     frame.render_widget(block, sections[0]);
 
     match card_data.answer_mode {
-        AnswerMode::MeaningRecall => {
-            // Show word only (reading is part of the answer)
+        AnswerMode::WordReview => {
+            // Show word + context sentence, ask to recall reading and meaning
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
@@ -164,33 +164,7 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect) {
                 .alignment(Alignment::Center),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "What does this word mean?",
-                    Style::default().fg(Color::DarkGray),
-                ))
-                .alignment(Alignment::Center),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Press Space to reveal meaning",
-                    Style::default().fg(Color::DarkGray),
-                ))
-                .alignment(Alignment::Center),
-            ];
-            frame.render_widget(Paragraph::new(lines), inner);
-        }
-        AnswerMode::ReadingRecall => {
-            // Show compound surface (no reading)
-            let lines = vec![
-                Line::from(""),
-                Line::from(Span::styled(
-                    &card_data.display_surface,
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ))
-                .alignment(Alignment::Center),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "What is the reading?",
+                    "Recall the reading and meaning",
                     Style::default().fg(Color::DarkGray),
                 ))
                 .alignment(Alignment::Center),
@@ -219,20 +193,6 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect) {
                 .alignment(Alignment::Center),
             ];
             frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-        }
-        AnswerMode::TypedReading => {
-            // This shouldn't be shown here (handled in TypingAnswer phase)
-            let lines = vec![
-                Line::from(""),
-                Line::from(Span::styled(
-                    &card_data.display_surface,
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ))
-                .alignment(Alignment::Center),
-            ];
-            frame.render_widget(Paragraph::new(lines), inner);
         }
         AnswerMode::SentenceFull => {
             // Show the full sentence, ask for translation
@@ -284,8 +244,9 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
     frame.render_widget(block, sections[0]);
 
     match card_data.answer_mode {
-        AnswerMode::MeaningRecall => {
-            // Show word + reading + definitions
+        AnswerMode::WordReview | AnswerMode::SentenceCloze => {
+            // For both word review and sentence cloze, show full answer:
+            // word + reading + user translation + definitions
             let mut lines = vec![
                 Line::from(""),
                 Line::from(vec![
@@ -304,7 +265,14 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
                 Line::from(""),
             ];
 
-            // Show user translation if available (before JMdict definitions)
+            // For cloze, also show the sentence with word revealed
+            if card_data.answer_mode == AnswerMode::SentenceCloze {
+                let cloze_spans = build_cloze_spans(card_data, false);
+                lines.push(Line::from(cloze_spans));
+                lines.push(Line::from(""));
+            }
+
+            // Show user translation if available
             if let Some(ref translation) = card_data.vocabulary.translation {
                 if !translation.is_empty() {
                     lines.push(Line::from(vec![
@@ -350,98 +318,6 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
             lines.push(Line::from(""));
             lines.push(rating_hint_line());
             frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-        }
-        AnswerMode::ReadingRecall => {
-            // Show compound surface + reading + short gloss
-            let mut lines = vec![
-                Line::from(""),
-                Line::from(Span::styled(
-                    &card_data.display_surface,
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    &card_data.display_reading,
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(""),
-            ];
-
-            // Show user translation if available
-            if let Some(ref translation) = card_data.vocabulary.translation {
-                if !translation.is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::styled("  ★ ", Style::default().fg(Color::Yellow)),
-                        Span::styled(translation.as_str(), Style::default().fg(Color::Green)),
-                    ]));
-                }
-            }
-
-            // Show first definition
-            if let Some(entry) = card_data.definitions.first() {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", entry.short_gloss()),
-                    Style::default().fg(Color::Cyan),
-                )));
-            }
-
-            lines.push(Line::from(""));
-            lines.push(rating_hint_line());
-            frame.render_widget(Paragraph::new(lines), inner);
-        }
-        AnswerMode::SentenceCloze => {
-            // Show sentence with word revealed and highlighted
-            let cloze_spans = build_cloze_spans(card_data, false);
-            let mut lines = vec![
-                Line::from(""),
-                Line::from(cloze_spans),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Answer: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(
-                        &card_data.display_surface,
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(" "),
-                    Span::styled(
-                        format!("({})", card_data.display_reading),
-                        Style::default().fg(Color::Cyan),
-                    ),
-                ]),
-                Line::from(""),
-            ];
-
-            // Show user translation if available
-            if let Some(ref translation) = card_data.vocabulary.translation {
-                if !translation.is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::styled("  ★ ", Style::default().fg(Color::Yellow)),
-                        Span::styled(translation.as_str(), Style::default().fg(Color::Green)),
-                    ]));
-                }
-            }
-
-            // Show first definition
-            if let Some(entry) = card_data.definitions.first() {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", entry.short_gloss()),
-                    Style::default().fg(Color::Cyan),
-                )));
-            }
-
-            lines.push(Line::from(""));
-            lines.push(rating_hint_line());
-            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-        }
-        AnswerMode::TypedReading => {
-            // Shouldn't reach here normally
-            frame.render_widget(Paragraph::new(""), inner);
         }
         AnswerMode::SentenceFull => {
             // Show sentence + translation

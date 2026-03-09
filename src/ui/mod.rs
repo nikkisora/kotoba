@@ -8,11 +8,11 @@ use ratatui::Frame;
 use crate::app::{App, Screen};
 
 /// Main render function that dispatches to the active screen.
-pub fn render(frame: &mut Frame, app: &App) {
+pub fn render(frame: &mut Frame, app: &mut App) {
     // Clear the entire frame first to prevent artifacts from previous screens.
     frame.render_widget(Clear, frame.size());
 
-    match &app.screen {
+    match &app.screen.clone() {
         Screen::Home => screens::home::render(frame, app),
         Screen::Library => screens::library::render(frame, app),
         Screen::ChapterSelect { .. } => screens::chapter_select::render(frame, app),

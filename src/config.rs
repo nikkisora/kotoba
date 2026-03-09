@@ -29,6 +29,9 @@ pub struct ReaderConfig {
     pub sidebar_width: u16,
     #[serde(default = "default_true")]
     pub furigana: bool,
+    /// Add a 1-row gap between sentences for readability.
+    #[serde(default = "default_true")]
+    pub sentence_gaps: bool,
     /// Number of chapters to keep preprocessed ahead of the reader.
     #[serde(default = "default_preprocess_ahead")]
     pub preprocess_ahead: usize,
@@ -36,8 +39,6 @@ pub struct ReaderConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SrsConfig {
-    #[serde(default = "default_answer_mode")]
-    pub default_answer_mode: String,
     #[serde(default = "default_new_cards")]
     pub new_cards_per_day: u32,
     #[serde(default)]
@@ -45,19 +46,19 @@ pub struct SrsConfig {
     /// Review order: "due_first" (default) or "random".
     #[serde(default = "default_review_order")]
     pub review_order: String,
-    /// Include word cards in review sessions.
-    #[serde(default = "default_true")]
-    pub review_word_cards: bool,
-    /// Include sentence cloze cards in review sessions.
-    #[serde(default = "default_true")]
-    pub review_sentence_cloze_cards: bool,
-    /// Include sentence full cards in review sessions.
-    #[serde(default = "default_true")]
-    pub review_sentence_full_cards: bool,
     /// Require typed reading input for word cards during review.
     /// When enabled, word cards ask the user to type the reading (accepts hiragana, romaji, or kanji).
     #[serde(default)]
     pub require_typed_input: bool,
+    /// Enable sentence cloze variant during word card review.
+    /// When enabled, word cards randomly show either the normal word front
+    /// or a sentence cloze front (word blanked in the sentence).
+    #[serde(default)]
+    pub enable_sentence_cloze: bool,
+    /// Probability (0-100) of showing a sentence cloze variant instead of
+    /// the normal word front. Only used when enable_sentence_cloze is true.
+    #[serde(default = "default_cloze_ratio")]
+    pub sentence_cloze_ratio: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,8 +85,8 @@ fn default_true() -> bool {
 fn default_preprocess_ahead() -> usize {
     3
 }
-fn default_answer_mode() -> String {
-    "meaning_recall".into()
+fn default_cloze_ratio() -> u32 {
+    50
 }
 fn default_new_cards() -> u32 {
     20
@@ -108,6 +109,7 @@ impl Default for ReaderConfig {
         Self {
             sidebar_width: default_sidebar_width(),
             furigana: true,
+            sentence_gaps: true,
             preprocess_ahead: default_preprocess_ahead(),
         }
     }
@@ -116,14 +118,12 @@ impl Default for ReaderConfig {
 impl Default for SrsConfig {
     fn default() -> Self {
         Self {
-            default_answer_mode: default_answer_mode(),
             new_cards_per_day: 20,
             max_reviews_per_session: 0,
             review_order: default_review_order(),
-            review_word_cards: true,
-            review_sentence_cloze_cards: true,
-            review_sentence_full_cards: true,
             require_typed_input: false,
+            enable_sentence_cloze: false,
+            sentence_cloze_ratio: default_cloze_ratio(),
         }
     }
 }

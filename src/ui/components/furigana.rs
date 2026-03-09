@@ -191,19 +191,53 @@ fn build_slots(
     slots
 }
 
-/// Returns true if the sentence would use furigana (i.e., any slot needs furigana).
-/// Used by the reader to decide whether to add inter-sentence spacing.
-pub fn sentence_has_furigana(
-    tokens: &[TokenDisplay],
-    show_furigana: bool,
-    force_all_furigana: bool,
-) -> bool {
-    let slots = build_slots(tokens, show_furigana, force_all_furigana);
-    slots.iter().any(|s| s.needs_furigana)
+/// Information about a single wrapped line within a sentence.
+struct LineInfo {
+    /// Index of the first slot on this line.
+    start: usize,
+    /// Index one past the last slot on this line.
+    end: usize,
+    /// Whether any slot on this line needs furigana.
+    has_furigana: bool,
+}
+
+/// Determine line breaks and per-line furigana needs for a sentence.
+fn compute_lines(slots: &[Slot], text_width: usize) -> Vec<LineInfo> {
+    let mut lines: Vec<LineInfo> = Vec::new();
+    let mut col: usize = 0;
+    let mut line_start: usize = 0;
+    let mut line_has_furigana = false;
+
+    for (i, slot) in slots.iter().enumerate() {
+        if col + slot.slot_width > text_width && col > 0 {
+            lines.push(LineInfo {
+                start: line_start,
+                end: i,
+                has_furigana: line_has_furigana,
+            });
+            col = 0;
+            line_start = i;
+            line_has_furigana = false;
+        }
+        if slot.needs_furigana {
+            line_has_furigana = true;
+        }
+        col += slot.slot_width;
+    }
+
+    // Last line (always present even if slots is empty — gives minimum height of 1)
+    lines.push(LineInfo {
+        start: line_start,
+        end: slots.len(),
+        has_furigana: line_has_furigana,
+    });
+
+    lines
 }
 
 /// Compute the exact height (in terminal rows) a sentence would occupy when rendered.
 /// Uses the same layout algorithm as `render_sentence` but without writing to a buffer.
+/// Each line independently gets height 2 (if it has furigana tokens) or 1 (if not).
 pub fn sentence_height(
     tokens: &[TokenDisplay],
     width: u16,
@@ -217,30 +251,21 @@ pub fn sentence_height(
 
     let usable_width = width as usize;
     let slots = build_slots(tokens, show_furigana, force_all_furigana);
-    let any_furigana = slots.iter().any(|s| s.needs_furigana);
-
-    let line_height: u16 = if any_furigana { 2 } else { 1 };
     let text_width = usable_width.saturating_sub(if is_current { 2 } else { 0 });
     if text_width == 0 {
-        return line_height;
+        return 1;
     }
 
-    let mut lines_used: u16 = 0;
-    let mut col: usize = 0;
-
-    for slot in &slots {
-        if col + slot.slot_width > text_width && col > 0 {
-            lines_used += 1;
-            col = 0;
-        }
-        col += slot.slot_width;
-    }
-
-    (lines_used + 1) * line_height
+    let lines = compute_lines(&slots, text_width);
+    lines
+        .iter()
+        .map(|l| if l.has_furigana { 2u16 } else { 1 })
+        .sum()
 }
 
 /// Render a sentence with furigana into a buffer area.
-/// Returns the number of lines consumed (each token pair = 2 lines if furigana shown).
+/// Returns the number of rows consumed. Each line independently gets height 2
+/// (if it contains furigana tokens) or 1 (if not).
 ///
 /// When `force_all_furigana` is true, furigana is shown for all kanji words regardless
 /// of vocabulary status (used in sidebar). When false, furigana respects the status-based
@@ -259,20 +284,19 @@ pub fn render_sentence(
 
     let usable_width = area.width as usize;
     let slots = build_slots(tokens, show_furigana, force_all_furigana);
-    let any_furigana = slots.iter().any(|s| s.needs_furigana);
-    let line_height: u16 = if any_furigana { 2 } else { 1 };
+    let text_width = usable_width.saturating_sub(if is_current { 2 } else { 0 });
+    let text_x = area.x + if is_current { 2 } else { 0 };
 
-    let mut lines_used: u16 = 0;
-    let mut col: usize = 0;
-    let mut current_line_y = area.y + lines_used * line_height;
+    let lines = compute_lines(&slots, text_width);
 
-    // Current sentence marker
-    if is_current && area.width >= 3 {
-        if current_line_y + line_height <= area.y + area.height {
-            let marker_y = if any_furigana {
-                current_line_y + 1
+    // Current sentence marker on the first line
+    if is_current && area.width >= 3 && !lines.is_empty() {
+        let first_line_h: u16 = if lines[0].has_furigana { 2 } else { 1 };
+        if first_line_h <= area.height {
+            let marker_y = if lines[0].has_furigana {
+                area.y + 1
             } else {
-                current_line_y
+                area.y
             };
             if marker_y < area.y + area.height {
                 buf.set_string(area.x, marker_y, "▶", Style::default().fg(Color::Cyan));
@@ -280,60 +304,62 @@ pub fn render_sentence(
         }
     }
 
-    let text_x = area.x + if is_current { 2 } else { 0 };
-    let text_width = usable_width.saturating_sub(if is_current { 2 } else { 0 });
+    let mut y_pos: u16 = 0; // cumulative row offset from area.y
+    let mut total_rows: u16 = 0;
 
-    for slot in &slots {
-        // Check if slot fits on current line
-        if col + slot.slot_width > text_width && col > 0 {
-            lines_used += 1;
-            col = 0;
-            current_line_y = area.y + lines_used * line_height;
-        }
+    for line in &lines {
+        let line_height: u16 = if line.has_furigana { 2 } else { 1 };
+        let current_line_y = area.y + y_pos;
 
         if current_line_y + line_height > area.y + area.height {
             break;
         }
 
-        let x = text_x + col as u16;
+        let mut col: usize = 0;
+        for slot in &slots[line.start..line.end] {
+            let x = text_x + col as u16;
 
-        // Render furigana line (centered above the slot)
-        if any_furigana && slot.needs_furigana {
-            let furigana_y = current_line_y;
-            let pad = if slot.slot_width > slot.reading_width {
-                (slot.slot_width - slot.reading_width) / 2
-            } else {
-                0
-            };
+            // Render furigana line (centered above the slot)
+            if line.has_furigana && slot.needs_furigana {
+                let furigana_y = current_line_y;
+                let pad = if slot.slot_width > slot.reading_width {
+                    (slot.slot_width - slot.reading_width) / 2
+                } else {
+                    0
+                };
 
-            if furigana_y < area.y + area.height {
-                buf.set_string(
-                    x + pad as u16,
-                    furigana_y,
-                    &slot.reading,
-                    Style::default().fg(Color::DarkGray),
-                );
+                if furigana_y < area.y + area.height {
+                    buf.set_string(
+                        x + pad as u16,
+                        furigana_y,
+                        &slot.reading,
+                        Style::default().fg(Color::DarkGray),
+                    );
+                }
             }
-        }
 
-        // Render surface text (centered within the slot if reading is wider)
-        let text_y = if any_furigana {
-            current_line_y + 1
-        } else {
-            current_line_y
-        };
-
-        if text_y < area.y + area.height {
-            let surface_pad = if slot.slot_width > slot.surface_width {
-                (slot.slot_width - slot.surface_width) / 2
+            // Render surface text
+            let text_y = if line.has_furigana {
+                current_line_y + 1
             } else {
-                0
+                current_line_y
             };
-            buf.set_string(x + surface_pad as u16, text_y, &slot.surface, slot.style);
+
+            if text_y < area.y + area.height {
+                let surface_pad = if slot.slot_width > slot.surface_width {
+                    (slot.slot_width - slot.surface_width) / 2
+                } else {
+                    0
+                };
+                buf.set_string(x + surface_pad as u16, text_y, &slot.surface, slot.style);
+            }
+
+            col += slot.slot_width;
         }
 
-        col += slot.slot_width;
+        y_pos += line_height;
+        total_rows += line_height;
     }
 
-    (lines_used + 1) * line_height
+    total_rows
 }

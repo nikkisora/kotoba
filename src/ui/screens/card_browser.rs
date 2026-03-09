@@ -40,7 +40,7 @@ fn pad_to_width(s: &str, target_width: usize) -> String {
 }
 
 /// Render the card browser screen.
-pub fn render(frame: &mut Frame, app: &App) {
+pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.size();
 
     let outer = Layout::vertical([
@@ -55,7 +55,38 @@ pub fn render(frame: &mut Frame, app: &App) {
     let filter_label = state.map(|s| s.filter.label()).unwrap_or("All");
     let sort_label = state.map(|s| s.sort.label()).unwrap_or("Due Date");
     let total = state.map(|s| s.entries.len()).unwrap_or(0);
-    let filtered_count = app.card_browser_filtered_entries().len();
+    let filtered = app.card_browser_filtered_entries();
+    let filtered_count = filtered.len();
+
+    let block = Block::default()
+        .title(" SRS Cards ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Blue));
+    let inner_area = block.inner(outer[1]);
+
+    // header(1) + bottom page indicator(1) = 2 rows reserved
+    let page_size = (inner_area.height as usize).saturating_sub(2);
+
+    // Update page_size in state so key handler knows the page size
+    if let Some(ref mut st) = app.card_browser_state {
+        st.page_size = page_size.max(1);
+    }
+
+    let state = app.card_browser_state.as_ref();
+    let selected = state.map(|s| s.selected).unwrap_or(0);
+    let page_start = state.map(|s| s.page_start).unwrap_or(0);
+
+    // Pagination
+    let total_pages = if filtered_count == 0 {
+        1
+    } else {
+        (filtered_count + page_size.max(1) - 1) / page_size.max(1)
+    };
+    let current_page = if page_size > 0 {
+        page_start / page_size + 1
+    } else {
+        1
+    };
 
     let title = Line::from(vec![
         Span::styled(
@@ -87,21 +118,6 @@ pub fn render(frame: &mut Frame, app: &App) {
     );
 
     // Content
-    let filtered = app.card_browser_filtered_entries();
-    let selected = state.map(|s| s.selected).unwrap_or(0);
-
-    // Fixed column widths (in terminal columns), including trailing space as separator.
-    // marker(2) + type(6) + front(variable) + mode(18) + state(7) + due(10)
-    let col_type: usize = 6;
-    let col_mode: usize = 18;
-    let col_state: usize = 7;
-    let col_due: usize = 10;
-
-    let block = Block::default()
-        .title(" SRS Cards ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Blue));
-    let inner_area = block.inner(outer[1]);
     frame.render_widget(block, outer[1]);
 
     if filtered.is_empty() {
@@ -117,8 +133,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         ]);
         frame.render_widget(msg, inner_area);
     } else {
+        // Fixed column widths (in terminal columns), including trailing space as separator.
+        // marker(2) + type(6) + front(variable) + state(7) + due(10)
+        let col_type: usize = 6;
+        let col_state: usize = 7;
+        let col_due: usize = 10;
+
         // Front column takes remaining width
-        let fixed = 2 + col_type + col_mode + col_state + col_due;
+        let fixed = 2 + col_type + col_state + col_due;
         let col_front = (inner_area.width as usize).saturating_sub(fixed).max(12);
 
         let hdr_style = Style::default()
@@ -130,15 +152,17 @@ pub fn render(frame: &mut Frame, app: &App) {
             Span::styled("  ", hdr_style),
             Span::styled(pad_to_width("Type", col_type), hdr_style),
             Span::styled(pad_to_width("Word / Sentence", col_front), hdr_style),
-            Span::styled(pad_to_width("Mode", col_mode), hdr_style),
             Span::styled(pad_to_width("State", col_state), hdr_style),
             Span::styled(pad_to_width("Due", col_due), hdr_style),
         ]);
 
-        let mut items: Vec<ListItem> = Vec::with_capacity(filtered.len() + 1);
+        let mut items: Vec<ListItem> = Vec::with_capacity(page_size + 2);
         items.push(ListItem::new(header));
 
-        for (display_idx, &entry_idx) in filtered.iter().enumerate() {
+        // Only render the current page slice
+        let page_end = (page_start + page_size).min(filtered_count);
+        for display_idx in page_start..page_end {
+            let &entry_idx = &filtered[display_idx];
             let entry = &state.unwrap().entries[entry_idx];
             let marker = if display_idx == selected {
                 "▶ "
@@ -158,9 +182,6 @@ pub fn render(frame: &mut Frame, app: &App) {
                 "sentence" => "S",
                 _ => "?",
             };
-
-            let mode_label =
-                crate::db::models::AnswerMode::from_str(&entry.card.answer_mode).label();
 
             let state_label = match entry.card.state.as_str() {
                 "new" => "new",
@@ -187,10 +208,6 @@ pub fn render(frame: &mut Frame, app: &App) {
                 ),
                 Span::styled(pad_to_width(&entry.display_front, col_front), style),
                 Span::styled(
-                    pad_to_width(mode_label, col_mode),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
                     pad_to_width(state_label, col_state),
                     Style::default().fg(state_color),
                 ),
@@ -201,13 +218,20 @@ pub fn render(frame: &mut Frame, app: &App) {
             ])));
         }
 
+        // Page indicator at the bottom
+        let page_indicator = Line::from(vec![Span::styled(
+            format!("  Page {}/{}", current_page, total_pages),
+            Style::default().fg(Color::DarkGray),
+        )]);
+        items.push(ListItem::new(page_indicator));
+
         let list = List::new(items);
         frame.render_widget(list, inner_area);
     }
 
     // Status bar
     let status = Line::from(vec![Span::styled(
-        " ↑↓:navigate  d:delete  m:change mode  r:reset  R:retire  f:filter  s:sort  Esc:back ",
+        " ↑↓:navigate  ←→:page  d:delete  r:reset  R:retire  f:filter  s:sort  Esc:back ",
         Style::default().fg(Color::DarkGray),
     )]);
     frame.render_widget(

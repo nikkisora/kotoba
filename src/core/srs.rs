@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::{NaiveDateTime, Utc};
 use rusqlite::Connection;
 
-use crate::db::models::{self, AnswerMode, CardType, SrsCard, VocabularyStatus};
+use crate::db::models::{self, CardType, SrsCard, VocabularyStatus};
 
 /// FSRS-powered spaced repetition engine.
 ///
@@ -55,49 +55,19 @@ impl SrsEngine {
 
     /// Create a word card for a vocabulary item if one doesn't already exist.
     /// Returns Some(card_id) if created, None if already exists.
-    pub fn create_word_card(
-        &self,
-        conn: &Connection,
-        vocabulary_id: i64,
-        answer_mode: &AnswerMode,
-    ) -> Result<Option<i64>> {
+    pub fn create_word_card(&self, conn: &Connection, vocabulary_id: i64) -> Result<Option<i64>> {
         if models::has_word_card(conn, vocabulary_id)? {
             return Ok(None);
         }
-        let card_id =
-            models::insert_srs_card(conn, vocabulary_id, &CardType::Word, answer_mode, None)?;
+        let card_id = models::insert_srs_card(conn, vocabulary_id, &CardType::Word)?;
         Ok(Some(card_id))
     }
 
-    /// Create a sentence card for a vocabulary item in its sentence context.
-    /// Returns Some(card_id) if created, None if already exists.
-    pub fn create_sentence_card(
-        &self,
-        conn: &Connection,
-        vocabulary_id: i64,
-    ) -> Result<Option<i64>> {
-        if models::has_sentence_card_for_vocab(conn, vocabulary_id)? {
-            return Ok(None);
-        }
-        let card_id = models::insert_srs_card(
-            conn,
-            vocabulary_id,
-            &CardType::Sentence,
-            &AnswerMode::SentenceCloze,
-            None,
-        )?;
-        Ok(Some(card_id))
-    }
-
-    /// Get due cards, filtering out sentence cards where all vocabulary is Known,
-    /// and respecting card type filter settings.
+    /// Get due cards, enforcing new_cards_per_day limit.
     pub fn get_due_cards(
         &self,
         conn: &Connection,
         limit: usize,
-        review_word_cards: bool,
-        review_sentence_cloze_cards: bool,
-        review_sentence_full_cards: bool,
         new_cards_per_day: u32,
     ) -> Result<Vec<SrsCard>> {
         let cards = models::get_due_cards(conn, limit)?;
@@ -110,44 +80,6 @@ impl SrsEngine {
         let filtered: Vec<SrsCard> = cards
             .into_iter()
             .filter(|card| {
-                // Filter by card type settings
-                let mode = AnswerMode::from_str(&card.answer_mode);
-                match mode {
-                    AnswerMode::MeaningRecall
-                    | AnswerMode::ReadingRecall
-                    | AnswerMode::TypedReading => {
-                        if !review_word_cards {
-                            return false;
-                        }
-                    }
-                    AnswerMode::SentenceCloze => {
-                        if !review_sentence_cloze_cards {
-                            return false;
-                        }
-                    }
-                    AnswerMode::SentenceFull => {
-                        if !review_sentence_full_cards {
-                            return false;
-                        }
-                    }
-                }
-
-                // For sentence cloze cards, check if target vocabulary is still Learning
-                if card.card_type == "sentence" && mode == AnswerMode::SentenceCloze {
-                    if let Some(vid) = card.vocabulary_id {
-                        if let Ok(Some(vocab)) = models::get_vocabulary_by_id(conn, vid) {
-                            return matches!(
-                                vocab.status,
-                                VocabularyStatus::Learning1
-                                    | VocabularyStatus::Learning2
-                                    | VocabularyStatus::Learning3
-                                    | VocabularyStatus::Learning4
-                            );
-                        }
-                    }
-                    return false;
-                }
-
                 // Enforce new_cards_per_day limit (0 = unlimited)
                 if card.state == "new" && new_cards_per_day > 0 {
                     if new_cards_added >= new_card_budget {
@@ -281,19 +213,14 @@ impl SrsEngine {
         conn: &Connection,
         vocabulary_id: i64,
         new_status: VocabularyStatus,
-        default_answer_mode: &str,
     ) -> Result<()> {
-        let answer_mode = AnswerMode::from_str(default_answer_mode);
-
         match new_status {
             VocabularyStatus::Learning1
             | VocabularyStatus::Learning2
             | VocabularyStatus::Learning3
             | VocabularyStatus::Learning4 => {
                 // Create word card if not exists
-                self.create_word_card(conn, vocabulary_id, &answer_mode)?;
-                // Create sentence card if not exists
-                self.create_sentence_card(conn, vocabulary_id)?;
+                self.create_word_card(conn, vocabulary_id)?;
             }
             VocabularyStatus::Known | VocabularyStatus::Ignored => {
                 // Retire all active cards for this vocabulary
