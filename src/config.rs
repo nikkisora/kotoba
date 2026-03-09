@@ -54,6 +54,10 @@ pub struct SrsConfig {
     /// Include sentence full cards in review sessions.
     #[serde(default = "default_true")]
     pub review_sentence_full_cards: bool,
+    /// Require typed reading input for word cards during review.
+    /// When enabled, word cards ask the user to type the reading (accepts hiragana, romaji, or kanji).
+    #[serde(default)]
+    pub require_typed_input: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +123,7 @@ impl Default for SrsConfig {
             review_word_cards: true,
             review_sentence_cloze_cards: true,
             review_sentence_full_cards: true,
+            require_typed_input: false,
         }
     }
 }

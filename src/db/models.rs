@@ -999,6 +999,22 @@ pub fn get_due_card_counts(conn: &Connection) -> Result<(usize, usize)> {
     Ok((due, new))
 }
 
+/// Count how many new cards were introduced (first reviewed) today.
+/// A card is "introduced" when it receives its first-ever review.
+pub fn get_new_cards_introduced_today(conn: &Connection) -> Result<usize> {
+    let count: usize = conn.query_row(
+        "SELECT COUNT(*) FROM (
+             SELECT card_id
+             FROM srs_reviews
+             GROUP BY card_id
+             HAVING MIN(reviewed_at) >= date('now')
+         )",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(count)
+}
+
 /// Get an SRS card by id.
 pub fn get_srs_card(conn: &Connection, id: i64) -> Result<Option<SrsCard>> {
     let mut stmt = conn.prepare("SELECT * FROM srs_cards WHERE id = ?1")?;

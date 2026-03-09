@@ -506,7 +506,7 @@ fn render_typing(frame: &mut Frame, state: &ReviewState, area: Rect) {
         .alignment(Alignment::Center),
         Line::from(""),
         Line::from(Span::styled(
-            "Type the reading in hiragana:",
+            "Type the reading (hiragana, romaji, or kanji):",
             Style::default().fg(Color::DarkGray),
         ))
         .alignment(Alignment::Center),
@@ -595,6 +595,24 @@ fn render_typed_result(frame: &mut Frame, state: &ReviewState, area: Rect) {
             Style::default().fg(Color::DarkGray),
         )]));
         lines.push(Line::from(diff_spans));
+    }
+
+    // Show meaning/definitions for word cards (helpful when require_typed_input is on)
+    if card_data.card.card_type == "word" {
+        if let Some(ref translation) = card_data.vocabulary.translation {
+            if !translation.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("  ★ ", Style::default().fg(Color::Yellow)),
+                    Span::styled(translation.as_str(), Style::default().fg(Color::Green)),
+                ]));
+            }
+        }
+        if let Some(entry) = card_data.definitions.first() {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", entry.short_gloss()),
+                Style::default().fg(Color::Cyan),
+            )));
+        }
     }
 
     lines.push(Line::from(""));

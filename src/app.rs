@@ -923,6 +923,7 @@ impl App {
                     self.config.srs.review_word_cards,
                     self.config.srs.review_sentence_cloze_cards,
                     self.config.srs.review_sentence_full_cards,
+                    self.config.srs.new_cards_per_day,
                 )
                 .unwrap_or_default();
             let new_count = cards.iter().filter(|c| c.state == "new").count();
@@ -2189,6 +2190,7 @@ impl App {
             self.config.srs.review_word_cards,
             self.config.srs.review_sentence_cloze_cards,
             self.config.srs.review_sentence_full_cards,
+            self.config.srs.new_cards_per_day,
         )?;
 
         // Build vocabulary cache for sentence context rendering
@@ -2422,13 +2424,16 @@ impl App {
 
     /// Begin showing the first card (transition from PreSession to ShowFront).
     pub fn begin_review(&mut self) {
+        let require_typed = self.config.srs.require_typed_input;
         if let Some(ref mut state) = self.review_state {
             if !state.queue.is_empty() {
                 state.phase = ReviewPhase::ShowFront;
                 state.card_shown_at = Instant::now();
-                // For typed reading mode, go directly to typing
+                // For typed reading mode (or word cards when require_typed_input is on), go directly to typing
                 if let Some(card_data) = state.queue.get(state.current_index) {
-                    if card_data.answer_mode == AnswerMode::TypedReading {
+                    if card_data.answer_mode == AnswerMode::TypedReading
+                        || (require_typed && card_data.card.card_type == "word")
+                    {
                         state.phase = ReviewPhase::TypingAnswer;
                     }
                 }
@@ -2444,24 +2449,45 @@ impl App {
     }
 
     /// Submit a typed answer (typed reading mode).
+    /// Normalizes input: accepts romaji (converted to hiragana), katakana (converted to hiragana),
+    /// hiragana, or kanji (compared against surface form). Uses fuzzy matching for typo tolerance.
     pub fn submit_typed_answer(&mut self) {
         if let Some(ref mut state) = self.review_state {
             if let Some(card_data) = state.queue.get(state.current_index) {
-                let expected = &card_data.display_reading;
-                let input = state.typed_input.clone();
-                let distance = strsim::levenshtein(&input, expected);
+                let expected_reading = &card_data.display_reading;
+                let expected_surface = &card_data.display_surface;
+                let raw_input = state.typed_input.clone();
+
+                // Normalize input: romaji→hiragana, katakana→hiragana
+                let normalized = tokenizer::normalize_reading_input(&raw_input);
+
+                // Check against both reading (hiragana) and surface form (kanji)
+                let dist_reading = strsim::levenshtein(&normalized, expected_reading);
+                let dist_surface = strsim::levenshtein(&normalized, expected_surface);
+
+                // Also check raw input against surface (user might type kanji directly)
+                let dist_raw_surface = strsim::levenshtein(&raw_input, expected_surface);
+
+                // Use the best (smallest) distance
+                let distance = dist_reading.min(dist_surface).min(dist_raw_surface);
+
+                // Scale tolerance by expected length: allow ~1 error per 3 chars
+                let expected_len = expected_reading.chars().count().max(1);
                 let is_correct = distance == 0;
 
-                // Auto-rate based on edit distance
-                let auto_rating = match distance {
-                    0 => Rating::Easy,
-                    1 => Rating::Good,
-                    2 => Rating::Hard,
-                    _ => Rating::Again,
+                // Auto-rate based on edit distance, scaled by word length
+                let auto_rating = if distance == 0 {
+                    Rating::Easy
+                } else if distance == 1 {
+                    Rating::Good
+                } else if distance <= expected_len / 3 + 1 {
+                    Rating::Hard
+                } else {
+                    Rating::Again
                 };
 
                 state.auto_rating = Some(auto_rating);
-                state.typed_result = Some((input, expected.clone(), is_correct));
+                state.typed_result = Some((normalized, expected_reading.clone(), is_correct));
                 state.phase = ReviewPhase::ShowResult;
             }
         }
@@ -2469,6 +2495,7 @@ impl App {
 
     /// Rate the current card and advance to the next one.
     pub fn rate_card(&mut self, rating: Rating) -> Result<()> {
+        let require_typed = self.config.srs.require_typed_input;
         let (card_id, elapsed_ms, typed_answer, answer_correct) = {
             let state = match self.review_state.as_ref() {
                 Some(s) => s,
@@ -2520,8 +2547,10 @@ impl App {
             } else {
                 // Show next card
                 state.card_shown_at = Instant::now();
-                let next_mode = state.queue[state.current_index].answer_mode.clone();
-                if next_mode == AnswerMode::TypedReading {
+                let next_card = &state.queue[state.current_index];
+                let next_mode = next_card.answer_mode.clone();
+                let is_word_card = next_card.card.card_type == "word";
+                if next_mode == AnswerMode::TypedReading || (require_typed && is_word_card) {
                     state.phase = ReviewPhase::TypingAnswer;
                 } else {
                     state.phase = ReviewPhase::ShowFront;
@@ -3026,7 +3055,7 @@ impl App {
                     SettingsItem {
                         key: "srs.new_cards_per_day".to_string(),
                         label: "New cards per day".to_string(),
-                        description: "Max new cards introduced per session".to_string(),
+                        description: "Max new cards introduced per day (0 = unlimited)".to_string(),
                         value: SettingsValue::Integer(srs.new_cards_per_day as i64),
                     },
                     SettingsItem {
@@ -3061,6 +3090,13 @@ impl App {
                         label: "Review sentence full cards".to_string(),
                         description: "Include sentence full in review".to_string(),
                         value: SettingsValue::Bool(self.config.srs.review_sentence_full_cards),
+                    },
+                    SettingsItem {
+                        key: "srs.require_typed_input".to_string(),
+                        label: "Require typed reading".to_string(),
+                        description: "Type reading for word cards (accepts hiragana/romaji/kanji)"
+                            .to_string(),
+                        value: SettingsValue::Bool(self.config.srs.require_typed_input),
                     },
                 ],
             },
@@ -3140,6 +3176,11 @@ impl App {
                     "srs.review_sentence_full_cards" => {
                         if let SettingsValue::Bool(v) = &item.value {
                             self.config.srs.review_sentence_full_cards = *v;
+                        }
+                    }
+                    "srs.require_typed_input" => {
+                        if let SettingsValue::Bool(v) = &item.value {
+                            self.config.srs.require_typed_input = *v;
                         }
                     }
                     _ => {}

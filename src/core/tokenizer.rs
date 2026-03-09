@@ -184,7 +184,7 @@ fn map_pos(major_pos: &str) -> &'static str {
 }
 
 /// Convert katakana string to hiragana.
-fn katakana_to_hiragana(kata: &str) -> String {
+pub fn katakana_to_hiragana(kata: &str) -> String {
     kata.chars()
         .map(|c| {
             if ('\u{30A1}'..='\u{30F6}').contains(&c) {
@@ -195,6 +195,260 @@ fn katakana_to_hiragana(kata: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Convert romaji (latin alphabet) to hiragana using standard Wapuro romanization.
+/// Handles common patterns: consonant+vowel pairs, double consonants (っ), n before
+/// consonants (ん), long vowels, and special digraphs (sh, ch, ts, etc.).
+pub fn romaji_to_hiragana(input: &str) -> String {
+    // Mapping table: longest matches first within each starting letter
+    static ROMAJI_MAP: &[(&str, &str)] = &[
+        // Four-letter combinations
+        ("xtsu", "っ"),
+        // Three-letter combinations
+        ("sha", "しゃ"),
+        ("shi", "し"),
+        ("shu", "しゅ"),
+        ("sho", "しょ"),
+        ("chi", "ち"),
+        ("tsu", "つ"),
+        ("cha", "ちゃ"),
+        ("chu", "ちゅ"),
+        ("cho", "ちょ"),
+        ("tya", "ちゃ"),
+        ("tyi", "ちぃ"),
+        ("tyu", "ちゅ"),
+        ("tye", "ちぇ"),
+        ("tyo", "ちょ"),
+        ("nya", "にゃ"),
+        ("nyi", "にぃ"),
+        ("nyu", "にゅ"),
+        ("nye", "にぇ"),
+        ("nyo", "にょ"),
+        ("hya", "ひゃ"),
+        ("hyi", "ひぃ"),
+        ("hyu", "ひゅ"),
+        ("hye", "ひぇ"),
+        ("hyo", "ひょ"),
+        ("mya", "みゃ"),
+        ("myi", "みぃ"),
+        ("myu", "みゅ"),
+        ("mye", "みぇ"),
+        ("myo", "みょ"),
+        ("rya", "りゃ"),
+        ("ryi", "りぃ"),
+        ("ryu", "りゅ"),
+        ("rye", "りぇ"),
+        ("ryo", "りょ"),
+        ("gya", "ぎゃ"),
+        ("gyi", "ぎぃ"),
+        ("gyu", "ぎゅ"),
+        ("gye", "ぎぇ"),
+        ("gyo", "ぎょ"),
+        ("bya", "びゃ"),
+        ("byi", "びぃ"),
+        ("byu", "びゅ"),
+        ("bye", "びぇ"),
+        ("byo", "びょ"),
+        ("pya", "ぴゃ"),
+        ("pyi", "ぴぃ"),
+        ("pyu", "ぴゅ"),
+        ("pye", "ぴぇ"),
+        ("pyo", "ぴょ"),
+        ("kya", "きゃ"),
+        ("kyi", "きぃ"),
+        ("kyu", "きゅ"),
+        ("kye", "きぇ"),
+        ("kyo", "きょ"),
+        ("jya", "じゃ"),
+        ("jyi", "じぃ"),
+        ("jyu", "じゅ"),
+        ("jye", "じぇ"),
+        ("jyo", "じょ"),
+        ("dya", "ぢゃ"),
+        ("dyi", "ぢぃ"),
+        ("dyu", "ぢゅ"),
+        ("dye", "ぢぇ"),
+        ("dyo", "ぢょ"),
+        // Two-letter combinations
+        ("ka", "か"),
+        ("ki", "き"),
+        ("ku", "く"),
+        ("ke", "け"),
+        ("ko", "こ"),
+        ("sa", "さ"),
+        ("si", "し"),
+        ("su", "す"),
+        ("se", "せ"),
+        ("so", "そ"),
+        ("ta", "た"),
+        ("ti", "ち"),
+        ("tu", "つ"),
+        ("te", "て"),
+        ("to", "と"),
+        ("na", "な"),
+        ("ni", "に"),
+        ("nu", "ぬ"),
+        ("ne", "ね"),
+        ("no", "の"),
+        ("ha", "は"),
+        ("hi", "ひ"),
+        ("hu", "ふ"),
+        ("he", "へ"),
+        ("ho", "ほ"),
+        ("ma", "ま"),
+        ("mi", "み"),
+        ("mu", "む"),
+        ("me", "め"),
+        ("mo", "も"),
+        ("ra", "ら"),
+        ("ri", "り"),
+        ("ru", "る"),
+        ("re", "れ"),
+        ("ro", "ろ"),
+        ("ya", "や"),
+        ("yi", "い"),
+        ("yu", "ゆ"),
+        ("ye", "いぇ"),
+        ("yo", "よ"),
+        ("wa", "わ"),
+        ("wi", "ゐ"),
+        ("wu", "う"),
+        ("we", "ゑ"),
+        ("wo", "を"),
+        ("ga", "が"),
+        ("gi", "ぎ"),
+        ("gu", "ぐ"),
+        ("ge", "げ"),
+        ("go", "ご"),
+        ("za", "ざ"),
+        ("zi", "じ"),
+        ("zu", "ず"),
+        ("ze", "ぜ"),
+        ("zo", "ぞ"),
+        ("da", "だ"),
+        ("di", "ぢ"),
+        ("du", "づ"),
+        ("de", "で"),
+        ("do", "ど"),
+        ("ba", "ば"),
+        ("bi", "び"),
+        ("bu", "ぶ"),
+        ("be", "べ"),
+        ("bo", "ぼ"),
+        ("pa", "ぱ"),
+        ("pi", "ぴ"),
+        ("pu", "ぷ"),
+        ("pe", "ぺ"),
+        ("po", "ぽ"),
+        ("ja", "じゃ"),
+        ("ji", "じ"),
+        ("ju", "じゅ"),
+        ("je", "じぇ"),
+        ("jo", "じょ"),
+        ("fa", "ふぁ"),
+        ("fi", "ふぃ"),
+        ("fu", "ふ"),
+        ("fe", "ふぇ"),
+        ("fo", "ふぉ"),
+        ("va", "ゔぁ"),
+        ("vi", "ゔぃ"),
+        ("vu", "ゔ"),
+        ("ve", "ゔぇ"),
+        ("vo", "ゔぉ"),
+        // Single vowels
+        ("a", "あ"),
+        ("i", "い"),
+        ("u", "う"),
+        ("e", "え"),
+        ("o", "お"),
+    ];
+
+    let lower = input.to_lowercase();
+    let chars: Vec<char> = lower.chars().collect();
+    let len = chars.len();
+    let mut result = String::new();
+    let mut i = 0;
+
+    while i < len {
+        // Handle double consonant → っ (e.g., "kk" → っ + continue with "k")
+        if i + 1 < len
+            && chars[i] == chars[i + 1]
+            && chars[i].is_ascii_alphabetic()
+            && chars[i] != 'a'
+            && chars[i] != 'i'
+            && chars[i] != 'u'
+            && chars[i] != 'e'
+            && chars[i] != 'o'
+            && chars[i] != 'n'
+        {
+            result.push('っ');
+            i += 1;
+            continue;
+        }
+
+        // Handle 'n' before a consonant or end of string → ん
+        if chars[i] == 'n' && i + 1 < len {
+            let next = chars[i + 1];
+            // 'n' followed by a consonant (not a vowel or 'y') → ん
+            // This includes 'nn' → ん + continue from second n
+            if next != 'a'
+                && next != 'i'
+                && next != 'u'
+                && next != 'e'
+                && next != 'o'
+                && next != 'y'
+            {
+                result.push('ん');
+                i += 1;
+                continue;
+            }
+        }
+
+        // Try longest match first (up to 4 chars)
+        let mut matched = false;
+        for try_len in (1..=4.min(len - i)).rev() {
+            let slice: String = chars[i..i + try_len].iter().collect();
+            if let Some((_, hira)) = ROMAJI_MAP.iter().find(|(rom, _)| *rom == slice.as_str()) {
+                result.push_str(hira);
+                i += try_len;
+                matched = true;
+                break;
+            }
+        }
+
+        if !matched {
+            // Handle trailing 'n' → ん
+            if chars[i] == 'n' && i + 1 == len {
+                result.push('ん');
+            } else {
+                // Pass through non-romaji characters (e.g., punctuation, already-hiragana)
+                result.push(chars[i]);
+            }
+            i += 1;
+        }
+    }
+
+    result
+}
+
+/// Normalize user input for reading comparison.
+/// Converts romaji to hiragana, katakana to hiragana, and lowercases.
+/// If the input is already hiragana/kanji, it passes through unchanged.
+pub fn normalize_reading_input(input: &str) -> String {
+    let trimmed = input.trim();
+
+    // Check if input contains any ASCII letters (romaji)
+    let has_ascii = trimmed.chars().any(|c| c.is_ascii_alphabetic());
+
+    if has_ascii {
+        // Convert romaji to hiragana, then normalize any remaining katakana
+        let converted = romaji_to_hiragana(trimmed);
+        katakana_to_hiragana(&converted)
+    } else {
+        // Convert katakana to hiragana (handles pure katakana or mixed input)
+        katakana_to_hiragana(trimmed)
+    }
 }
 
 /// Split text into paragraphs (by double newlines or single newlines with content).
@@ -479,6 +733,99 @@ mod tests {
         assert_eq!(katakana_to_hiragana("タベル"), "たべる");
         assert_eq!(katakana_to_hiragana("ニホンゴ"), "にほんご");
         assert_eq!(katakana_to_hiragana("abc"), "abc");
+    }
+
+    #[test]
+    fn test_romaji_to_hiragana_basic_vowels() {
+        assert_eq!(romaji_to_hiragana("a"), "あ");
+        assert_eq!(romaji_to_hiragana("i"), "い");
+        assert_eq!(romaji_to_hiragana("u"), "う");
+        assert_eq!(romaji_to_hiragana("e"), "え");
+        assert_eq!(romaji_to_hiragana("o"), "お");
+    }
+
+    #[test]
+    fn test_romaji_to_hiragana_consonant_vowel() {
+        assert_eq!(romaji_to_hiragana("ka"), "か");
+        assert_eq!(romaji_to_hiragana("ki"), "き");
+        assert_eq!(romaji_to_hiragana("ku"), "く");
+        assert_eq!(romaji_to_hiragana("ke"), "け");
+        assert_eq!(romaji_to_hiragana("ko"), "こ");
+        assert_eq!(romaji_to_hiragana("sa"), "さ");
+        assert_eq!(romaji_to_hiragana("ta"), "た");
+        assert_eq!(romaji_to_hiragana("na"), "な");
+        assert_eq!(romaji_to_hiragana("ha"), "は");
+        assert_eq!(romaji_to_hiragana("ma"), "ま");
+        assert_eq!(romaji_to_hiragana("ra"), "ら");
+        assert_eq!(romaji_to_hiragana("ya"), "や");
+        assert_eq!(romaji_to_hiragana("wa"), "わ");
+    }
+
+    #[test]
+    fn test_romaji_to_hiragana_words() {
+        assert_eq!(romaji_to_hiragana("taberu"), "たべる");
+        assert_eq!(romaji_to_hiragana("nihongo"), "にほんご");
+        assert_eq!(romaji_to_hiragana("arigatou"), "ありがとう");
+        assert_eq!(romaji_to_hiragana("ohayou"), "おはよう");
+        assert_eq!(romaji_to_hiragana("konnichiwa"), "こんにちわ");
+    }
+
+    #[test]
+    fn test_romaji_to_hiragana_special() {
+        // shi/chi/tsu digraphs
+        assert_eq!(romaji_to_hiragana("shi"), "し");
+        assert_eq!(romaji_to_hiragana("chi"), "ち");
+        assert_eq!(romaji_to_hiragana("tsu"), "つ");
+        assert_eq!(romaji_to_hiragana("fu"), "ふ");
+        // Combo digraphs
+        assert_eq!(romaji_to_hiragana("sha"), "しゃ");
+        assert_eq!(romaji_to_hiragana("cho"), "ちょ");
+        assert_eq!(romaji_to_hiragana("nya"), "にゃ");
+    }
+
+    #[test]
+    fn test_romaji_to_hiragana_double_consonant() {
+        assert_eq!(romaji_to_hiragana("kitte"), "きって");
+        assert_eq!(romaji_to_hiragana("gakkou"), "がっこう");
+        assert_eq!(romaji_to_hiragana("kekkon"), "けっこん");
+    }
+
+    #[test]
+    fn test_romaji_to_hiragana_n() {
+        // n before consonant → ん
+        assert_eq!(romaji_to_hiragana("sanpo"), "さんぽ");
+        assert_eq!(romaji_to_hiragana("sensei"), "せんせい");
+        // nn → ん
+        assert_eq!(romaji_to_hiragana("onna"), "おんな");
+        // n at end → ん
+        assert_eq!(romaji_to_hiragana("nihon"), "にほん");
+    }
+
+    #[test]
+    fn test_romaji_to_hiragana_case_insensitive() {
+        assert_eq!(romaji_to_hiragana("Taberu"), "たべる");
+        assert_eq!(romaji_to_hiragana("NIHON"), "にほん");
+    }
+
+    #[test]
+    fn test_normalize_reading_input_romaji() {
+        assert_eq!(normalize_reading_input("taberu"), "たべる");
+        assert_eq!(normalize_reading_input("  taberu  "), "たべる");
+    }
+
+    #[test]
+    fn test_normalize_reading_input_katakana() {
+        assert_eq!(normalize_reading_input("タベル"), "たべる");
+    }
+
+    #[test]
+    fn test_normalize_reading_input_hiragana_passthrough() {
+        assert_eq!(normalize_reading_input("たべる"), "たべる");
+    }
+
+    #[test]
+    fn test_normalize_reading_input_kanji_passthrough() {
+        assert_eq!(normalize_reading_input("食べる"), "食べる");
     }
 
     #[test]

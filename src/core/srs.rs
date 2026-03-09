@@ -98,8 +98,15 @@ impl SrsEngine {
         review_word_cards: bool,
         review_sentence_cloze_cards: bool,
         review_sentence_full_cards: bool,
+        new_cards_per_day: u32,
     ) -> Result<Vec<SrsCard>> {
         let cards = models::get_due_cards(conn, limit)?;
+
+        // Count how many new cards were already introduced today
+        let introduced_today = models::get_new_cards_introduced_today(conn).unwrap_or(0);
+        let new_card_budget = (new_cards_per_day as usize).saturating_sub(introduced_today);
+        let mut new_cards_added = 0usize;
+
         let filtered: Vec<SrsCard> = cards
             .into_iter()
             .filter(|card| {
@@ -139,6 +146,14 @@ impl SrsEngine {
                         }
                     }
                     return false;
+                }
+
+                // Enforce new_cards_per_day limit (0 = unlimited)
+                if card.state == "new" && new_cards_per_day > 0 {
+                    if new_cards_added >= new_card_budget {
+                        return false;
+                    }
+                    new_cards_added += 1;
                 }
 
                 true
