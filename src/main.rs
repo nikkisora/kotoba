@@ -117,6 +117,14 @@ enum Commands {
         #[arg(short, long)]
         chapter: Option<usize>,
     },
+    /// Manage the LLM response cache
+    #[command(
+        subcommand,
+        long_about = "Manage the LLM response cache.\n\n\
+                      LLM responses are cached in the database to avoid redundant API calls.\n\
+                      Use these commands to view cache statistics or clear the cache."
+    )]
+    Cache(CacheCommands),
     /// Launch the interactive TUI reader
     #[command(long_about = "Launch the interactive TUI reader.\n\n\
                       Opens the full-screen terminal interface with reader, sidebar,\n\
@@ -134,6 +142,14 @@ enum Commands {
                       Displays the resolved paths for config and data directories,\n\
                       and prints all current configuration values.")]
     Config,
+}
+
+#[derive(Subcommand)]
+enum CacheCommands {
+    /// Show cache statistics (number of entries, total tokens used)
+    Stats,
+    /// Clear all cached LLM responses
+    Clear,
 }
 
 fn main() -> Result<()> {
@@ -255,6 +271,18 @@ fn main() -> Result<()> {
                 );
             }
         }
+        Commands::Cache(subcmd) => match subcmd {
+            CacheCommands::Stats => {
+                let (count, total_tokens) = models::get_llm_cache_stats(&conn)?;
+                println!("LLM Cache Statistics:");
+                println!("  Cached responses: {}", count);
+                println!("  Total tokens used: {}", total_tokens);
+            }
+            CacheCommands::Clear => {
+                let count = models::clear_llm_cache(&conn)?;
+                println!("Cleared {} cached LLM responses", count);
+            }
+        },
         Commands::Run => {
             drop(conn); // Close CLI connection; TUI opens its own
             run_tui(cfg)?;
@@ -364,6 +392,9 @@ fn run_tui(config: config::AppConfig) -> Result<()> {
     // Initialize background importer with event sender
     app.init_background_importer(events.sender());
 
+    // Store event sender for async LLM operations
+    app.init_event_tx(events.sender());
+
     // Main event loop
     loop {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
@@ -381,6 +412,9 @@ fn run_tui(config: config::AppConfig) -> Result<()> {
             }
             Event::Import(evt) => {
                 app.handle_import_event(evt);
+            }
+            Event::Llm(evt) => {
+                app.handle_llm_event(evt);
             }
         }
 
@@ -1811,6 +1845,22 @@ fn handle_review_key(app: &mut App, key: KeyEvent) {
                     app.reveal_answer();
                 }
             }
+            // LLM analysis of card's source sentence
+            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let sentence_text = app
+                    .review_state
+                    .as_ref()
+                    .and_then(|s| s.queue.get(s.current_index))
+                    .map(|c| c.sentence_text.clone())
+                    .unwrap_or_default();
+                if !sentence_text.is_empty() {
+                    if let Err(e) = app.request_llm_analysis_for_sentence(sentence_text) {
+                        app.set_message(format!("LLM error: {}", e));
+                    }
+                } else {
+                    app.set_message("No sentence context for this card");
+                }
+            }
             KeyCode::Esc => {
                 app.review_state = None;
                 let target = app.previous_screen.take().unwrap_or(Screen::Home);
@@ -1831,7 +1881,7 @@ fn handle_review_key(app: &mut App, key: KeyEvent) {
                         Some(state.context_word_index.unwrap_or(0).saturating_sub(1));
                 }
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right => {
                 if let Some(ref mut state) = app.review_state {
                     if let Some(card_data) = state.queue.get(state.current_index) {
                         let max_idx = card_data.sentence_tokens.len().saturating_sub(1);
@@ -1876,6 +1926,22 @@ fn handle_review_key(app: &mut App, key: KeyEvent) {
                     }
                 }
             }
+            // LLM analysis of card's source sentence
+            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let sentence_text = app
+                    .review_state
+                    .as_ref()
+                    .and_then(|s| s.queue.get(s.current_index))
+                    .map(|c| c.sentence_text.clone())
+                    .unwrap_or_default();
+                if !sentence_text.is_empty() {
+                    if let Err(e) = app.request_llm_analysis_for_sentence(sentence_text) {
+                        app.set_message(format!("LLM error: {}", e));
+                    }
+                } else {
+                    app.set_message("No sentence context for this card");
+                }
+            }
             KeyCode::Esc => {
                 app.review_state = None;
                 let target = app.previous_screen.take().unwrap_or(Screen::Home);
@@ -1896,7 +1962,7 @@ fn handle_review_key(app: &mut App, key: KeyEvent) {
                         Some(state.context_word_index.unwrap_or(0).saturating_sub(1));
                 }
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right => {
                 if let Some(ref mut state) = app.review_state {
                     if let Some(card_data) = state.queue.get(state.current_index) {
                         let max = card_data.sentence_tokens.len().saturating_sub(1);
@@ -1978,6 +2044,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                     state.sentence_index -= 1;
                     state.word_index = None;
                     state.sidebar_scroll = 0;
+                    state.show_llm_sidebar = false;
                 }
             }
             let _ = app.save_reading_progress();
@@ -1990,6 +2057,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                         state.sentence_index += 1;
                         state.word_index = None;
                         state.sidebar_scroll = 0;
+                        state.show_llm_sidebar = false;
                         Some((dep, false)) // (departing_index, is_at_end)
                     } else {
                         Some((state.sentence_index, true))
@@ -2218,6 +2286,13 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
             }
         }
 
+        // LLM auto-translate current sentence
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Err(e) = app.request_llm_translation() {
+                app.set_message(format!("LLM error: {}", e));
+            }
+        }
+
         // Word translation editor
         KeyCode::Char('t') => {
             if let Err(e) = app.open_translation_editor() {
@@ -2225,7 +2300,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        // Sentence translation editor
+        // Sentence translation editor (manual)
         KeyCode::Char('T') => {
             if let Err(e) = app.open_sentence_translation_editor() {
                 app.set_message(format!("Error: {}", e));
@@ -2258,8 +2333,21 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        // Deselect word, or go back to previous screen if no word selected
+        // Deselect word, dismiss LLM sidebar, or go back to previous screen
         KeyCode::Esc => {
+            // First dismiss LLM sidebar if showing
+            let showing_llm = app
+                .reader_state
+                .as_ref()
+                .map(|s| s.show_llm_sidebar)
+                .unwrap_or(false);
+            if showing_llm {
+                if let Some(ref mut state) = app.reader_state {
+                    state.show_llm_sidebar = false;
+                    state.sidebar_scroll = 0;
+                }
+                return;
+            }
             let has_word = app
                 .reader_state
                 .as_ref()

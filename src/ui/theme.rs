@@ -678,7 +678,7 @@ mod tests {
 
     #[test]
     fn test_by_name() {
-        let t = Theme::by_name("gruvbox");
+        let t = Theme::builtin("gruvbox").expect("gruvbox theme should exist");
         assert!(matches!(t.accent, Color::Rgb(104, 157, 106)));
     }
 }

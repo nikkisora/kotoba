@@ -5,6 +5,23 @@ use std::time::{Duration, Instant};
 
 use crate::import::background::ImportEvent;
 
+/// Events sent from background LLM workers to the TUI event loop.
+#[derive(Debug, Clone)]
+pub enum LlmEvent {
+    /// An LLM sentence analysis completed successfully.
+    AnalysisComplete {
+        text_id: i64,
+        sentence_index: usize,
+        sentence_text: String,
+        analysis: crate::core::llm::SentenceAnalysis,
+        model: String,
+        tokens_used: i64,
+        cached: bool,
+    },
+    /// An LLM request failed.
+    Failed { error: String },
+}
+
 /// Application events.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -19,6 +36,8 @@ pub enum Event {
     Mouse(crossterm::event::MouseEvent),
     /// A background import event completed/started/failed.
     Import(ImportEvent),
+    /// A background LLM event completed/failed.
+    Llm(LlmEvent),
 }
 
 /// Event loop that polls crossterm events and sends them via mpsc channel.

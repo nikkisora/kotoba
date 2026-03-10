@@ -320,6 +320,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
                 Line::from("  C            Copy current sentence to clipboard"),
                 Line::from("  t            Edit word translation"),
                 Line::from("  T            Edit sentence translation"),
+                Line::from("  Ctrl+T       LLM sentence analysis (toggle)"),
                 Line::from("  g            Look up word on Jisho.org"),
                 Line::from("  G            Open sentence in browser translator"),
                 Line::from("  m            Mark expression (MWE mode)"),
@@ -335,6 +336,14 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
                 Line::from("  Right/l      Extend selection right"),
                 Line::from("  Enter        Save expression"),
                 Line::from("  Esc          Cancel"),
+                Line::from(""),
+                // ── SRS Review ──
+                Line::from(Span::styled("SRS Review:", heading)),
+                Line::from("  Space        Reveal answer / Rate Good"),
+                Line::from("  1-4          Rate: Again/Hard/Good/Easy"),
+                Line::from("  Left/Right   Navigate sentence context"),
+                Line::from("  Ctrl+L       LLM analysis of card sentence"),
+                Line::from("  Esc          Exit review"),
                 Line::from(""),
                 // ── Import Menu ──
                 Line::from(Span::styled("Import Menu:", heading)),

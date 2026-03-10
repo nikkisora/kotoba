@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::config::AppConfig;
 use crate::core::dictionary::{self, DictEntry};
+use crate::core::llm::SentenceAnalysis;
 use crate::core::srs::{Rating, SrsEngine};
 use crate::core::tokenizer::{self, GroupToken};
 use crate::db::models::{
@@ -212,6 +213,10 @@ pub struct ReaderState {
     pub expression_mark: Option<(usize, usize)>,
     /// Cached sentence translations keyed by sentence_index.
     pub sentence_translations: HashMap<usize, models::SentenceTranslation>,
+    /// Cached LLM sentence analyses keyed by sentence_index.
+    pub llm_analyses: HashMap<usize, SentenceAnalysis>,
+    /// Whether the sidebar is currently showing LLM analysis (vs. word list).
+    pub show_llm_sidebar: bool,
 }
 
 /// How the library list is sorted.
@@ -483,6 +488,8 @@ pub struct ReviewState {
     pub auto_rating: Option<Rating>,
     /// Typed answer comparison result: (input, expected, is_correct).
     pub typed_result: Option<(String, String, bool)>,
+    /// LLM analysis result for the current card's sentence (shown via `l` key).
+    pub llm_analysis: Option<SentenceAnalysis>,
 }
 
 // ─── Card Browser ────────────────────────────────────────────────────
@@ -646,6 +653,10 @@ pub struct App {
     /// Persistent clipboard handle — kept alive so Linux clipboard managers
     /// can read the content before it disappears.
     pub clipboard: Option<arboard::Clipboard>,
+    /// Event channel sender for dispatching async LLM results back to the main loop.
+    pub event_tx: Option<std::sync::mpsc::Sender<crate::ui::events::Event>>,
+    /// Whether an LLM request is currently in-flight.
+    pub llm_pending: bool,
 }
 
 impl App {
@@ -677,7 +688,14 @@ impl App {
             pending_open_chapter: None,
             pending_imports: Vec::new(),
             clipboard: arboard::Clipboard::new().ok(),
+            event_tx: None,
+            llm_pending: false,
         }
+    }
+
+    /// Store the event sender for async operations (LLM, etc.).
+    pub fn init_event_tx(&mut self, tx: std::sync::mpsc::Sender<crate::ui::events::Event>) {
+        self.event_tx = Some(tx);
     }
 
     /// Initialize the background importer with an event sender.
@@ -1252,6 +1270,8 @@ impl App {
             mwe_matches,
             expression_mark: None,
             sentence_translations,
+            llm_analyses: HashMap::new(),
+            show_llm_sidebar: false,
         });
 
         self.previous_screen = Some(self.screen.clone());
@@ -2541,6 +2561,7 @@ impl App {
             vocabulary_cache,
             auto_rating: None,
             typed_result: None,
+            llm_analysis: None,
         });
 
         self.previous_screen = Some(self.screen.clone());
@@ -2664,6 +2685,7 @@ impl App {
             state.auto_rating = None;
             state.typed_result = None;
             state.context_word_index = None;
+            state.llm_analysis = None;
 
             if state.current_index >= state.queue.len() {
                 // All cards done
@@ -3104,6 +3126,283 @@ impl App {
         }
 
         Ok(())
+    }
+
+    // ─── LLM Integration ────────────────────────────────────────────────
+
+    /// Request an LLM analysis for the current sentence (async, non-blocking).
+    /// Spawns a background thread that sends the result back via the event channel.
+    pub fn request_llm_translation(&mut self) -> Result<()> {
+        let state = match self.reader_state.as_ref() {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        if state.sentences.is_empty() {
+            return Ok(());
+        }
+
+        if self.config.llm.api_key.is_empty() {
+            self.set_message("LLM API key not set. Configure in Settings > LLM.");
+            return Ok(());
+        }
+
+        // If already showing LLM sidebar, toggle it off
+        if state.show_llm_sidebar {
+            if let Some(ref mut s) = self.reader_state {
+                s.show_llm_sidebar = false;
+                s.sidebar_scroll = 0;
+            }
+            return Ok(());
+        }
+
+        // If we already have a cached analysis for this sentence, show it immediately
+        if state.llm_analyses.contains_key(&state.sentence_index) {
+            if let Some(ref mut s) = self.reader_state {
+                s.show_llm_sidebar = true;
+                s.sidebar_scroll = 0;
+            }
+            return Ok(());
+        }
+
+        if self.llm_pending {
+            self.set_message("LLM request already in progress...");
+            return Ok(());
+        }
+
+        let sentence = &state.sentences[state.sentence_index];
+        let text_id = state.text_id;
+        let sentence_index = state.sentence_index;
+        let sentence_text = sentence.text.clone();
+
+        // Gather up to 3 previous sentences as context
+        let context_sentences: Vec<String> = {
+            let start = sentence_index.saturating_sub(3);
+            (start..sentence_index)
+                .filter_map(|i| state.sentences.get(i).map(|s| s.text.clone()))
+                .collect()
+        };
+
+        let event_tx = match self.event_tx.as_ref() {
+            Some(tx) => tx.clone(),
+            None => {
+                self.set_message("Event system not initialized");
+                return Ok(());
+            }
+        };
+
+        let config = self.config.llm.clone();
+        let db_path = self.db_path.clone();
+
+        self.llm_pending = true;
+        // Show the LLM sidebar immediately (will show spinner while loading)
+        if let Some(ref mut s) = self.reader_state {
+            s.show_llm_sidebar = true;
+            s.sidebar_scroll = 0;
+        }
+
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<crate::ui::events::LlmEvent> {
+                let conn = crate::db::connection::open_or_create(&db_path)?;
+                let response = crate::core::llm::analyze_sentence(
+                    &config,
+                    &conn,
+                    &sentence_text,
+                    &context_sentences,
+                )?;
+                Ok(crate::ui::events::LlmEvent::AnalysisComplete {
+                    text_id,
+                    sentence_index,
+                    sentence_text,
+                    analysis: response.analysis,
+                    model: response.model,
+                    tokens_used: response.tokens_used,
+                    cached: response.cached,
+                })
+            })();
+
+            let event = match result {
+                Ok(evt) => evt,
+                Err(e) => crate::ui::events::LlmEvent::Failed {
+                    error: e.to_string(),
+                },
+            };
+
+            let _ = event_tx.send(crate::ui::events::Event::Llm(event));
+        });
+
+        Ok(())
+    }
+
+    /// Request an LLM analysis for an arbitrary sentence (e.g., from SRS review).
+    /// Spawns a background thread, result comes via event channel.
+    pub fn request_llm_analysis_for_sentence(&mut self, sentence_text: String) -> Result<()> {
+        if self.config.llm.api_key.is_empty() {
+            self.set_message("LLM API key not set. Configure in Settings > LLM.");
+            return Ok(());
+        }
+
+        if self.llm_pending {
+            self.set_message("LLM request already in progress...");
+            return Ok(());
+        }
+
+        let event_tx = match self.event_tx.as_ref() {
+            Some(tx) => tx.clone(),
+            None => {
+                self.set_message("Event system not initialized");
+                return Ok(());
+            }
+        };
+
+        let config = self.config.llm.clone();
+        let db_path = self.db_path.clone();
+
+        self.llm_pending = true;
+        self.set_message("Analyzing with LLM...");
+
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<crate::ui::events::LlmEvent> {
+                let conn = crate::db::connection::open_or_create(&db_path)?;
+                let response = crate::core::llm::analyze_sentence(
+                    &config,
+                    &conn,
+                    &sentence_text,
+                    &[], // No context for standalone sentences
+                )?;
+                Ok(crate::ui::events::LlmEvent::AnalysisComplete {
+                    text_id: 0,        // Not associated with a reader text
+                    sentence_index: 0, // Not associated with a reader sentence
+                    sentence_text,
+                    analysis: response.analysis,
+                    model: response.model,
+                    tokens_used: response.tokens_used,
+                    cached: response.cached,
+                })
+            })();
+
+            let event = match result {
+                Ok(evt) => evt,
+                Err(e) => crate::ui::events::LlmEvent::Failed {
+                    error: e.to_string(),
+                },
+            };
+
+            let _ = event_tx.send(crate::ui::events::Event::Llm(event));
+        });
+
+        Ok(())
+    }
+
+    /// Handle an LLM event from the background thread.
+    pub fn handle_llm_event(&mut self, event: crate::ui::events::LlmEvent) {
+        use crate::ui::events::LlmEvent;
+        self.llm_pending = false;
+
+        match event {
+            LlmEvent::AnalysisComplete {
+                text_id,
+                sentence_index,
+                sentence_text,
+                analysis,
+                model,
+                tokens_used,
+                cached,
+            } => {
+                let translation = analysis.translation.clone();
+                let explanation = if analysis.explanation.is_empty() {
+                    None
+                } else {
+                    Some(analysis.explanation.as_str())
+                };
+
+                // Save translation to database (same as manual translation)
+                let conn = match self.open_db() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        self.set_message(format!("DB error saving translation: {}", e));
+                        return;
+                    }
+                };
+
+                let source = if cached { "llm_cached" } else { "llm" };
+                let model_ref = if cached { None } else { Some(model.as_str()) };
+
+                // Only save to sentence_translations if this is from a reader context
+                if text_id > 0 {
+                    match models::upsert_sentence_translation(
+                        &conn,
+                        text_id,
+                        sentence_index as i64,
+                        &sentence_text,
+                        &translation,
+                        explanation,
+                        source,
+                        model_ref,
+                    ) {
+                        Ok(trans_id) => {
+                            // Create SRS card if not exists (same as manual T key)
+                            let card_msg = if !models::has_sentence_full_card(&conn, trans_id)
+                                .unwrap_or(true)
+                            {
+                                let _ = models::insert_sentence_full_card(&conn, trans_id);
+                                " + SRS card"
+                            } else {
+                                ""
+                            };
+
+                            let cache_msg = if cached { " (cached)" } else { "" };
+                            let token_msg = if !cached && tokens_used > 0 {
+                                format!(" [{} tokens]", tokens_used)
+                            } else {
+                                String::new()
+                            };
+                            self.set_message(format!(
+                                "LLM analysis complete{}{}{}",
+                                card_msg, cache_msg, token_msg
+                            ));
+
+                            // Update sentence translation in-memory cache
+                            if let Some(ref mut state) = self.reader_state {
+                                if state.text_id == text_id {
+                                    if let Ok(Some(st)) = models::get_sentence_translation(
+                                        &conn,
+                                        text_id,
+                                        sentence_index as i64,
+                                    ) {
+                                        state.sentence_translations.insert(sentence_index, st);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.set_message(format!("Error saving LLM translation: {}", e));
+                        }
+                    }
+                }
+
+                // Store the full analysis in the reader state cache
+                if let Some(ref mut state) = self.reader_state {
+                    if state.text_id == text_id || text_id == 0 {
+                        state.llm_analyses.insert(sentence_index, analysis.clone());
+                        state.show_llm_sidebar = true;
+                        state.sidebar_scroll = 0;
+                    }
+                }
+
+                // For SRS review, store the analysis for display
+                if text_id == 0 {
+                    // Store on the review state for display
+                    if let Some(ref mut rs) = self.review_state {
+                        rs.llm_analysis = Some(analysis);
+                    }
+                    let cache_msg = if cached { " (cached)" } else { "" };
+                    self.set_message(format!("LLM analysis complete{}", cache_msg));
+                }
+            }
+            LlmEvent::Failed { error } => {
+                self.set_message(format!("LLM error: {}", error));
+            }
+        }
     }
 
     // ─── Card Browser ────────────────────────────────────────────────────
@@ -3577,6 +3876,35 @@ impl App {
                     },
                 ],
             },
+            SettingsCategory {
+                name: "LLM".to_string(),
+                items: vec![
+                    SettingsItem {
+                        key: "llm.endpoint".to_string(),
+                        label: "API Endpoint".to_string(),
+                        description: "OpenAI-compatible API URL".to_string(),
+                        value: SettingsValue::Text(self.config.llm.endpoint.clone()),
+                    },
+                    SettingsItem {
+                        key: "llm.api_key".to_string(),
+                        label: "API Key".to_string(),
+                        description: "API key for the LLM service".to_string(),
+                        value: SettingsValue::Text(self.config.llm.api_key.clone()),
+                    },
+                    SettingsItem {
+                        key: "llm.model".to_string(),
+                        label: "Model".to_string(),
+                        description: "Model name (e.g. gpt-4o, gpt-3.5-turbo)".to_string(),
+                        value: SettingsValue::Text(self.config.llm.model.clone()),
+                    },
+                    SettingsItem {
+                        key: "llm.max_tokens".to_string(),
+                        label: "Max tokens".to_string(),
+                        description: "Maximum tokens per LLM response".to_string(),
+                        value: SettingsValue::Integer(self.config.llm.max_tokens as i64),
+                    },
+                ],
+            },
         ];
 
         self.settings_state = Some(SettingsState {
@@ -3656,6 +3984,26 @@ impl App {
                     "srs.sentence_cloze_ratio" => {
                         if let SettingsValue::Integer(v) = &item.value {
                             self.config.srs.sentence_cloze_ratio = (*v).max(0).min(100) as u32;
+                        }
+                    }
+                    "llm.endpoint" => {
+                        if let SettingsValue::Text(v) = &item.value {
+                            self.config.llm.endpoint = v.clone();
+                        }
+                    }
+                    "llm.api_key" => {
+                        if let SettingsValue::Text(v) = &item.value {
+                            self.config.llm.api_key = v.clone();
+                        }
+                    }
+                    "llm.model" => {
+                        if let SettingsValue::Text(v) = &item.value {
+                            self.config.llm.model = v.clone();
+                        }
+                    }
+                    "llm.max_tokens" => {
+                        if let SettingsValue::Integer(v) = &item.value {
+                            self.config.llm.max_tokens = (*v).max(64).min(16384) as usize;
                         }
                     }
                     "general.theme" => {

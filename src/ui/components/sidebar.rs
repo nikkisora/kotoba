@@ -5,8 +5,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 
 use crate::app::App;
+use crate::core::llm::SentenceAnalysis;
 use crate::db::models::VocabularyStatus;
 use crate::ui::components::furigana;
+use crate::ui::theme::Theme;
 
 /// Render the sidebar panel showing current sentence breakdown.
 pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
@@ -22,11 +24,18 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
     let t = &app.theme;
     let sentence = &state.sentences[state.sentence_index];
 
+    // Decide sidebar title and mode
+    let (title, show_llm) = if state.show_llm_sidebar {
+        (" LLM Analysis ", true)
+    } else {
+        (" Sentence Details ", false)
+    };
+
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(Style::default().fg(t.muted))
         .title(Span::styled(
-            " Sentence Details ",
+            title,
             Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ));
 
@@ -37,6 +46,118 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         return;
     }
 
+    if show_llm {
+        render_llm_sidebar(inner, buf, app, t);
+    } else {
+        render_word_list_sidebar(inner, buf, app, t, state, sentence);
+    }
+}
+
+/// Render the LLM analysis sidebar view.
+fn render_llm_sidebar(area: Rect, buf: &mut Buffer, app: &App, t: &Theme) {
+    let state = app.reader_state.as_ref().unwrap();
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Show loading spinner if LLM is pending
+    if app.llm_pending {
+        let spinner = app.spinner_char();
+        lines.push(Line::from(Span::styled(
+            format!("{} Analyzing...", spinner),
+            Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Press Ctrl+T to cancel",
+            Style::default().fg(t.muted),
+        )));
+    } else if let Some(analysis) = state.llm_analyses.get(&state.sentence_index) {
+        render_analysis_lines(&mut lines, analysis, t);
+    } else {
+        lines.push(Line::from(Span::styled(
+            "No analysis available",
+            Style::default().fg(t.muted),
+        )));
+    }
+
+    // Footer hint
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Ctrl+T: dismiss | Esc: dismiss",
+        Style::default().fg(t.muted),
+    )));
+
+    let scroll = state.sidebar_scroll as u16;
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+
+    paragraph.render(area, buf);
+}
+
+/// Build lines for displaying a SentenceAnalysis.
+fn render_analysis_lines(lines: &mut Vec<Line>, analysis: &SentenceAnalysis, t: &Theme) {
+    // Translation
+    lines.push(Line::from(Span::styled(
+        "Translation:",
+        Style::default().fg(t.success).add_modifier(Modifier::BOLD),
+    )));
+    // Wrap long translation text manually into multiple lines
+    for line_str in analysis.translation.lines() {
+        lines.push(Line::from(Span::styled(
+            line_str.to_string(),
+            Style::default().fg(t.success),
+        )));
+    }
+    lines.push(Line::from(""));
+
+    // Component breakdown
+    if !analysis.component_breakdown.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Components:",
+            Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
+        )));
+        for comp in &analysis.component_breakdown {
+            // Japanese + romaji
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {}", comp.japanese),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!(" ({})", comp.romaji), Style::default().fg(t.muted)),
+            ]));
+            // Meaning
+            lines.push(Line::from(Span::styled(
+                format!("    {}", comp.meaning),
+                Style::default().fg(t.fg),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Explanation
+    if !analysis.explanation.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Explanation:",
+            Style::default().fg(t.info).add_modifier(Modifier::BOLD),
+        )));
+        for line_str in analysis.explanation.lines() {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", line_str),
+                Style::default().fg(t.fg),
+            )));
+        }
+    }
+}
+
+/// Render the normal word list sidebar (original behavior).
+fn render_word_list_sidebar(
+    inner: Rect,
+    buf: &mut Buffer,
+    app: &App,
+    t: &Theme,
+    state: &crate::app::ReaderState,
+    sentence: &crate::app::SentenceData,
+) {
     // --- Section 1: Sentence header with furigana (rendered directly to buffer) ---
     let header_label_y = inner.y;
     buf.set_string(
@@ -82,8 +203,12 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
     // Show sentence translation if available
     if let Some(trans) = state.sentence_translations.get(&state.sentence_index) {
         if !trans.translation.is_empty() {
+            let label = match trans.source.as_str() {
+                "llm" | "llm_cached" => "Translation (LLM):",
+                _ => "Translation:",
+            };
             lines.push(Line::from(Span::styled(
-                "Translation:",
+                label,
                 Style::default().fg(t.success).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(Span::styled(
@@ -92,6 +217,13 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
             )));
             lines.push(Line::from(""));
         }
+    } else if app.llm_pending {
+        let spinner = app.spinner_char();
+        lines.push(Line::from(Span::styled(
+            format!("{} Translating...", spinner),
+            Style::default().fg(t.muted).add_modifier(Modifier::ITALIC),
+        )));
+        lines.push(Line::from(""));
     }
 
     // Separator
@@ -148,9 +280,6 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         };
 
         // Show surface reading (conjugated form) if available, else lemma reading.
-        // For group heads, concatenate readings from all group members so the full
-        // expression reading is shown (e.g. "ねこのても借りたい" not just "ねこ").
-        // By default, hide readings for Known/Ignored words; show_all_readings overrides this.
         let display_reading: String = if let Some(gid) = token.group_id {
             sentence
                 .tokens
@@ -222,7 +351,6 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         let style = if is_selected {
             Style::default().add_modifier(Modifier::BOLD).fg(t.accent)
         } else if is_known_or_ignored {
-            // Dim Known/Ignored words when they are shown via toggle
             Style::default().fg(t.muted)
         } else {
             Style::default()
@@ -273,4 +401,34 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         .scroll((scroll, 0));
 
     paragraph.render(words_area, buf);
+}
+
+/// Render LLM analysis in the SRS review screen sidebar/popup area.
+pub fn render_review_llm_analysis(
+    area: Rect,
+    buf: &mut Buffer,
+    analysis: &SentenceAnalysis,
+    t: &Theme,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.muted))
+        .title(Span::styled(
+            " LLM Analysis ",
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ));
+
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    if inner.width < 4 || inner.height < 2 {
+        return;
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+    render_analysis_lines(&mut lines, analysis, t);
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+
+    paragraph.render(inner, buf);
 }

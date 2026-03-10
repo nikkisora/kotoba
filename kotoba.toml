@@ -15,7 +15,7 @@ new_cards_per_day = 20
 max_reviews_per_session = 0
 
 [llm]
-endpoint = "https://api.openai.com/v1"
+endpoint = "https://openrouter.ai/api/v1"
 api_key = ""
-model = "gpt-4o"
+model = "google/gemini-3.1-flash-lite-preview"
 max_tokens = 2048

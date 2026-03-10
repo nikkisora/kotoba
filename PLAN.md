@@ -18,6 +18,7 @@ Everything below is **not yet implemented**. For a description of what the app c
     - `"words"`: array of `{ "surface", "base_form", "reading", "meaning", "pos", "notes" }`
     - `"grammar"`: array of `{ "pattern", "explanation", "example" }`
     - `"idioms"`: array of `{ "phrase", "meaning", "literal" }` (empty if none)
+    - `"explanation"`: a free form explanation of the sentence
   - POST to `{endpoint}/chat/completions` with `response_format: { type: "json_object" }`
   - Parse response into `SentenceAnalysis` struct
 

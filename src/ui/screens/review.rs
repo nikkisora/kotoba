@@ -33,13 +33,32 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     render_title_bar(frame, state, outer[0], t);
 
+    // If LLM analysis is available, split the main area to show it in a side panel
+    let has_llm = state.llm_analysis.is_some();
+    let main_area = if has_llm {
+        let split = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(outer[1]);
+        // Render LLM analysis in the right panel
+        if let Some(ref analysis) = state.llm_analysis {
+            crate::ui::components::sidebar::render_review_llm_analysis(
+                split[1],
+                frame.buffer_mut(),
+                analysis,
+                t,
+            );
+        }
+        split[0]
+    } else {
+        outer[1]
+    };
+
     match state.phase {
-        ReviewPhase::PreSession => render_pre_session(frame, state, outer[1], t),
-        ReviewPhase::ShowFront => render_card_front(frame, state, outer[1], t),
-        ReviewPhase::ShowBack => render_card_back(frame, state, outer[1], t),
-        ReviewPhase::TypingAnswer => render_typing(frame, state, outer[1], t),
-        ReviewPhase::ShowResult => render_typed_result(frame, state, outer[1], t),
-        ReviewPhase::SessionSummary => render_summary(frame, state, outer[1], t),
+        ReviewPhase::PreSession => render_pre_session(frame, state, main_area, t),
+        ReviewPhase::ShowFront => render_card_front(frame, state, main_area, t),
+        ReviewPhase::ShowBack => render_card_back(frame, state, main_area, t),
+        ReviewPhase::TypingAnswer => render_typing(frame, state, main_area, t),
+        ReviewPhase::ShowResult => render_typed_result(frame, state, main_area, t),
+        ReviewPhase::SessionSummary => render_summary(frame, state, main_area, t),
     }
 
     render_status_bar(frame, state, outer[2], t);

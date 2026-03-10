@@ -101,10 +101,10 @@ fn default_review_order() -> String {
     "due_first".into()
 }
 fn default_llm_endpoint() -> String {
-    "https://api.openai.com/v1".into()
+    "https://openrouter.ai/api/v1".into()
 }
 fn default_model() -> String {
-    "gpt-4o".into()
+    "google/gemini-3.1-flash-lite-preview".into()
 }
 fn default_max_tokens() -> usize {
     2048

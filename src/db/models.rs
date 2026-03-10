@@ -219,6 +219,21 @@ pub struct LlmCacheEntry {
     pub created_at: String,
 }
 
+impl LlmCacheEntry {
+    pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            request_type: row.get("request_type")?,
+            request_hash: row.get("request_hash")?,
+            request_body: row.get("request_body")?,
+            response: row.get("response")?,
+            model: row.get("model")?,
+            tokens_used: row.get("tokens_used")?,
+            created_at: row.get("created_at")?,
+        })
+    }
+}
+
 /// A user-created multi-word expression.
 #[derive(Debug, Clone)]
 pub struct UserExpression {
@@ -1436,6 +1451,62 @@ pub fn get_all_vocabulary_sentence_texts(
         }
     }
     Ok(sentences)
+}
+
+// ─── LLM Cache CRUD ──────────────────────────────────────────────────
+
+/// Get a cached LLM response by request hash.
+pub fn get_llm_cache_by_hash(
+    conn: &Connection,
+    request_hash: &str,
+) -> Result<Option<LlmCacheEntry>> {
+    let mut stmt = conn.prepare("SELECT * FROM llm_cache WHERE request_hash = ?1")?;
+    let mut rows = stmt.query_map(params![request_hash], LlmCacheEntry::from_row)?;
+    Ok(rows.next().transpose()?)
+}
+
+/// Insert a new LLM cache entry. Returns the id.
+pub fn insert_llm_cache(
+    conn: &Connection,
+    request_type: &str,
+    request_hash: &str,
+    request_body: &str,
+    response: &str,
+    model: &str,
+    tokens_used: i64,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO llm_cache (request_type, request_hash, request_body, response, model, tokens_used)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(request_hash) DO UPDATE SET
+             response = excluded.response,
+             model = excluded.model,
+             tokens_used = excluded.tokens_used",
+        params![request_type, request_hash, request_body, response, model, tokens_used],
+    )?;
+    let id = conn.query_row(
+        "SELECT id FROM llm_cache WHERE request_hash = ?1",
+        params![request_hash],
+        |row| row.get(0),
+    )?;
+    Ok(id)
+}
+
+/// Get LLM cache statistics: (total_entries, total_tokens_used).
+pub fn get_llm_cache_stats(conn: &Connection) -> Result<(usize, i64)> {
+    let count: usize = conn.query_row("SELECT COUNT(*) FROM llm_cache", [], |r| r.get(0))?;
+    let tokens: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(tokens_used), 0) FROM llm_cache",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok((count, tokens))
+}
+
+/// Clear all LLM cache entries. Returns number of rows deleted.
+pub fn clear_llm_cache(conn: &Connection) -> Result<usize> {
+    let count = conn.execute("DELETE FROM llm_cache", [])?;
+    Ok(count)
 }
 
 #[cfg(test)]
