@@ -4,48 +4,46 @@ Everything below is **not yet implemented**. For a description of what the app c
 
 ---
 
-## Phase 5 — LLM Integration
+## Phase 5 — LLM Integration ✅
 
 **Goal**: On-demand structured sentence analysis via OpenAI-compatible API.
 
 ### 5.1 LLM Client
-- [ ] Implement `core/llm.rs`:
-  - `LlmClient` struct: `endpoint: String`, `api_key: String`, `model: String`, `max_tokens: usize`
-  - Load config from TOML (config keys already exist in `[llm]` section)
-  - `async fn analyze_sentence(&self, sentence: &str) -> Result<SentenceAnalysis>`
-  - Build request body with system prompt for structured JSON output:
-    - `"translation"`: full English translation
-    - `"words"`: array of `{ "surface", "base_form", "reading", "meaning", "pos", "notes" }`
-    - `"grammar"`: array of `{ "pattern", "explanation", "example" }`
-    - `"idioms"`: array of `{ "phrase", "meaning", "literal" }` (empty if none)
-    - `"explanation"`: a free form explanation of the sentence
+- [x] Implement `core/llm.rs`:
+  - `analyze_sentence()` function with `LlmConfig` (endpoint, api_key, model, max_tokens)
+  - Load config from TOML `[llm]` section
+  - System prompt bundled at compile time via `include_str!("data/system_prompt.txt")`
+  - Structured JSON output: `translation`, `component_breakdown` (japanese/romaji/meaning), `explanation`
   - POST to `{endpoint}/chat/completions` with `response_format: { type: "json_object" }`
-  - Parse response into `SentenceAnalysis` struct
+  - Parse response into `SentenceAnalysis` struct; handles markdown code fences
+  - Context support: up to 3 previous sentences included in user message
+  - Default: OpenRouter endpoint, `google/gemini-3.1-flash-lite-preview` model
 
 ### 5.2 Caching Layer
-- [ ] Before making API call, hash `sha256(sentence + model)` and check `llm_cache` table
-- [ ] On cache hit: deserialize stored JSON response, return immediately
-- [ ] On cache miss: make API call, store response + metadata (model, tokens_used) in `llm_cache`
-- [ ] Cache invalidation: provide CLI command `kotoba cache clear` and `kotoba cache stats`
+- [x] Before making API call, hash `sha256(sentence + model)` and check `llm_cache` table
+- [x] On cache hit: deserialize stored JSON response, return immediately
+- [x] On cache miss: make API call, store response + metadata (model, tokens_used) in `llm_cache`
+- [x] Cache invalidation: `kotoba cache clear` and `kotoba cache stats` CLI commands
 
 ### 5.3 Async TUI Integration
-- [ ] In `ui/events.rs`, add `LlmResponse(Result<SentenceAnalysis>)` event variant
-- [ ] When user presses `l` in Reader:
+- [x] In `ui/events.rs`, `LlmEvent` enum with `AnalysisComplete` and `Failed` variants
+- [x] `Ctrl+T` in Reader toggles LLM sidebar (`l` reserved for vim-style navigation):
   - Check cache first (synchronous, fast)
-  - If cache miss: spawn `tokio::spawn(async { client.analyze_sentence(sentence).await })`
-  - Show loading spinner in sidebar: `⠋ Analyzing...` (rotating braille animation)
+  - If cache miss: spawn `std::thread::spawn` (sync mpsc event loop) with blocking HTTP call
+  - Show loading spinner in sidebar: rotating braille animation
   - On completion: send result through `mpsc` channel -> event loop picks it up -> update sidebar
-- [ ] Display LLM result in sidebar (replacing word list temporarily):
+- [x] Display LLM result in sidebar (replacing word list temporarily):
   - **Translation**: full sentence translation at top
-  - **Word breakdown**: table of words with contextual meanings
-  - **Grammar**: each pattern with explanation
-  - **Idioms**: if any detected
-  - Press `Esc` or `l` again to dismiss and return to JMdict word list view
+  - **Component breakdown**: table of japanese + romaji + meaning
+  - **Explanation**: free-form contextual explanation
+  - Press `Esc` or `Ctrl+T` again to dismiss and return to JMdict word list view
+- [x] LLM translation saved to `sentence_translations` table (same as user-provided)
+- [x] LLM settings configurable in Settings screen (endpoint, api_key, model, max_tokens)
 
 ### 5.4 LLM in SRS Review
-- [ ] During SRS review, `l` key triggers LLM analysis of the card's source sentence
-- [ ] Result shown in a side panel or popup overlay
-- [ ] Same caching applies — most sentences will already be cached from Reader usage
+- [x] `Ctrl+L` in SRS review triggers LLM analysis of the card's source sentence
+- [x] Result shown in a side panel
+- [x] Same caching applies — most sentences will already be cached from Reader usage
 
 ---
 
