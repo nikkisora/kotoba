@@ -76,7 +76,7 @@ fn render_left_panels(frame: &mut Frame, area: Rect, app: &App, focus: StatsFocu
 
     // Split left column into panels
     let panels = Layout::vertical([
-        Constraint::Length(7),  // overview
+        Constraint::Length(8),  // overview
         Constraint::Length(10), // vocabulary growth chart
         Constraint::Length(4),  // status breakdown bar
         Constraint::Min(6),     // SRS panel
@@ -112,38 +112,57 @@ fn render_overview(
     let o = &state.overview;
     let streak_icon = if state.streak > 0 { "🔥 " } else { "" };
 
+    // Right-align numbers to a fixed width for clean columns
+    let w = 7; // width for number column
+    let num_pad = " ".repeat(w);
+
     let lines = vec![
         Line::from(vec![
-            Span::styled(" Texts Read:     ", Style::default().fg(t.muted)),
+            Span::styled(" Finished:  ", Style::default().fg(t.muted)),
             Span::styled(
-                format_number(o.total_texts),
+                format!("{:>w$}", format_number(o.texts_finished), w = w),
                 Style::default().fg(t.stats_text),
             ),
-            Span::raw("     "),
-            Span::styled(" Total Vocabulary: ", Style::default().fg(t.muted)),
+            Span::raw("   "),
+            Span::styled("Vocabulary: ", Style::default().fg(t.muted)),
             Span::styled(
-                format_number(o.total_vocabulary),
+                format!("{:>w$}", format_number(o.total_vocabulary), w = w),
                 Style::default().fg(t.stats_text),
             ),
         ]),
         Line::from(vec![
-            Span::styled(" Known:          ", Style::default().fg(t.muted)),
-            Span::styled(format_number(o.known_words), Style::default().fg(t.success)),
-            Span::raw("     "),
-            Span::styled(" Learning:         ", Style::default().fg(t.muted)),
+            Span::styled(" Reading:   ", Style::default().fg(t.muted)),
             Span::styled(
-                format_number(o.learning_words),
+                format!("{:>w$}", format_number(o.texts_reading), w = w),
+                Style::default().fg(t.stats_text),
+            ),
+            Span::raw("   "),
+            Span::styled("Known:      ", Style::default().fg(t.muted)),
+            Span::styled(
+                format!("{:>w$}", format_number(o.known_words), w = w),
+                Style::default().fg(t.success),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("            "),
+            Span::raw(num_pad.as_str()),
+            Span::raw("   "),
+            Span::styled("Learning:   ", Style::default().fg(t.muted)),
+            Span::styled(
+                format!("{:>w$}", format_number(o.learning_words), w = w),
                 Style::default().fg(t.warning),
             ),
         ]),
         Line::from(vec![
-            Span::styled(" New:            ", Style::default().fg(t.muted)),
-            Span::styled(format_number(o.new_words), Style::default().fg(t.info)),
-            Span::raw("     "),
-            Span::styled(" Ignored:          ", Style::default().fg(t.muted)),
-            Span::styled(format_number(o.ignored_words), Style::default().fg(t.muted)),
+            Span::raw("            "),
+            Span::raw(num_pad.as_str()),
+            Span::raw("   "),
+            Span::styled("New:        ", Style::default().fg(t.muted)),
+            Span::styled(
+                format!("{:>w$}", format_number(o.new_words), w = w),
+                Style::default().fg(t.info),
+            ),
         ]),
-        Line::from(""),
         Line::from(vec![
             Span::raw(" "),
             Span::raw(streak_icon),
@@ -160,6 +179,12 @@ fn render_overview(
                     } else {
                         Modifier::empty()
                     }),
+            ),
+            Span::raw("   "),
+            Span::styled("Ignored:    ", Style::default().fg(t.muted)),
+            Span::styled(
+                format!("{:>w$}", format_number(o.ignored_words), w = w),
+                Style::default().fg(t.muted),
             ),
         ]),
     ];
@@ -517,7 +542,7 @@ fn render_coverage_panel(frame: &mut Frame, area: Rect, app: &App, focus: StatsF
         let empty = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
-                " No texts read yet",
+                " No imported texts yet",
                 Style::default().fg(t.muted),
             )),
         ])

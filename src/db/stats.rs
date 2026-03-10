@@ -303,12 +303,11 @@ pub fn get_text_coverage(conn: &Connection, text_id: i64) -> Result<CoverageStat
     })
 }
 
-/// Get coverage stats for all imported texts.
+/// Get coverage stats for all imported texts (including unstarted ones).
 pub fn get_all_text_coverages(conn: &Connection) -> Result<Vec<CoverageStats>> {
     let text_ids: Vec<i64> = {
-        let mut stmt = conn.prepare(
-            "SELECT id FROM texts WHERE last_read_at IS NOT NULL ORDER BY last_read_at DESC",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id FROM texts ORDER BY COALESCE(last_read_at, created_at) DESC")?;
         let rows = stmt.query_map([], |r| r.get(0))?;
         rows.filter_map(|r| r.ok()).collect()
     };
@@ -316,7 +315,9 @@ pub fn get_all_text_coverages(conn: &Connection) -> Result<Vec<CoverageStats>> {
     let mut result = Vec::new();
     for text_id in text_ids {
         if let Ok(stats) = get_text_coverage(conn, text_id) {
-            result.push(stats);
+            if stats.total_tokens > 0 {
+                result.push(stats);
+            }
         }
     }
     Ok(result)
@@ -327,7 +328,8 @@ pub fn get_all_text_coverages(conn: &Connection) -> Result<Vec<CoverageStats>> {
 /// High-level overview statistics for the stats screen.
 #[derive(Debug, Clone, Default)]
 pub struct OverviewStats {
-    pub total_texts: usize,
+    pub texts_finished: usize,
+    pub texts_reading: usize,
     pub total_vocabulary: usize,
     pub known_words: usize,
     pub learning_words: usize,
@@ -336,9 +338,22 @@ pub struct OverviewStats {
 }
 
 pub fn get_overview_stats(conn: &Connection) -> Result<OverviewStats> {
-    let total_texts: usize = conn
+    let texts_finished: usize = conn
         .query_row(
-            "SELECT COUNT(*) FROM texts WHERE last_read_at IS NOT NULL",
+            "SELECT COUNT(*) FROM texts
+             WHERE last_read_at IS NOT NULL
+             AND total_sentences > 0
+             AND last_sentence_index >= total_sentences - 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    let texts_reading: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM texts
+             WHERE last_read_at IS NOT NULL
+             AND (total_sentences = 0 OR last_sentence_index < total_sentences - 1)",
             [],
             |r| r.get(0),
         )
@@ -378,7 +393,8 @@ pub fn get_overview_stats(conn: &Connection) -> Result<OverviewStats> {
     let total = known + learning + new + ignored;
 
     Ok(OverviewStats {
-        total_texts,
+        texts_finished,
+        texts_reading,
         total_vocabulary: total,
         known_words: known,
         learning_words: learning,

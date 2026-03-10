@@ -1,4 +1,5 @@
 /target
+/scripts
 *.db
 *.db-wal
 *.db-shm
