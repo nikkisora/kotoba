@@ -1,0 +1,58 @@
+# kotoba theme overrides
+#
+# Place this file at ~/.config/kotoba/theme.toml to customize the active theme.
+# These values override the built-in theme selected in settings (general.theme).
+#
+# Colors are specified as hex strings: "#RRGGBB" or "RRGGBB".
+# Only include the fields you want to override — everything else uses the
+# built-in theme defaults.
+#
+# Available built-in themes: tokyo-night (default), solarized-light, gruvbox
+# Set the base theme in kotoba.toml or in the TUI Settings screen:
+#   [general]
+#   theme = "tokyo-night"
+
+# ── Base colors ──
+# Background and foreground for the entire application.
+[base]
+# bg = "#1a1b26"           # Main background
+# fg = "#a9b1d6"           # Default text color
+# title_bar_bg = "#24283b" # Title bar and status bar background
+
+# ── Semantic palette ──
+# Used for highlights, indicators, and UI accents throughout the app.
+[palette]
+# accent  = "#7aa2f7"      # Brand color — app name, selected items, cursor
+# info    = "#7dcfff"      # Informational — borders, new-card indicator
+# success = "#9ece6a"      # Positive — import success, known words, good rating
+# warning = "#e0af68"      # Attention — due cards, learning status
+# error   = "#f7768e"      # Destructive — delete, skip, fail rating
+# muted   = "#565f89"      # De-emphasized — hints, help text, furigana
+# subtle  = "#bb9af7"      # Secondary accent — group headers
+
+# ── Vocabulary status colors (reader) ──
+# Controls how words are highlighted inline based on their learning status.
+# Each status has a background (bg) and foreground (fg) color.
+[vocabulary]
+# new_bg     = "#3b4261"   # New/unseen words
+# new_fg     = "#c0caf5"
+# l1_bg      = "#2e3347"   # Learning stage 1
+# l1_fg      = "#ff9e64"
+# l2_bg      = "#2a2f42"   # Learning stage 2
+# l2_fg      = "#e0af68"
+# l3_bg      = "#252a3d"   # Learning stage 3
+# l3_fg      = "#9ece6a"
+# l4_bg      = "#1f2335"   # Learning stage 4 (nearly known)
+# l4_fg      = "#73daca"
+# ignored_fg = "#444b6a"   # Ignored/skipped words
+
+# ── UI element colors ──
+# Fine-grained control over specific UI elements.
+[ui]
+# progress_bar       = "#3d59a1"  # Reading progress bar
+# stats_text         = "#565f89"  # Statistics text (K%/L%/N%)
+# status_msg_fg      = "#1a1b26"  # Status bar message foreground
+# status_msg_bg      = "#e0af68"  # Status bar message background
+# cloze_reveal_fg    = "#9ece6a"  # Revealed word in cloze cards
+# cloze_reveal_bg    = "#1f2335"  # Background for revealed cloze word
+# chapter_in_progress = "#e0af68" # Chapter currently being read

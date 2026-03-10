@@ -14,13 +14,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         None => {
             let msg =
                 Paragraph::new("No text loaded. Use 'kotoba import <file>' then 'kotoba run'.")
-                    .style(Style::default().fg(Color::DarkGray));
+                    .style(Style::default().fg(app.theme.muted));
             frame.render_widget(msg, frame.size());
             return;
         }
     };
 
     let area = frame.size();
+    let t = &app.theme;
 
     // Top bar
     let outer = Layout::vertical([
@@ -34,17 +35,15 @@ pub fn render(frame: &mut Frame, app: &App) {
     let title = Line::from(vec![
         Span::styled(
             " kotoba",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" — "),
         Span::styled(&state.text_title, Style::default().fg(Color::White)),
         Span::raw("  "),
-        Span::styled("[?]help", Style::default().fg(Color::DarkGray)),
+        Span::styled("[?]help", Style::default().fg(t.muted)),
     ]);
     frame.render_widget(
-        Paragraph::new(title).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(title).style(Style::default().bg(t.title_bar_bg)),
         outer[0],
     );
 
@@ -86,28 +85,28 @@ pub fn render(frame: &mut Frame, app: &App) {
     };
 
     let autopromote_indicator = if state.autopromote_enabled {
-        Span::styled(" [A] ", Style::default().fg(Color::Green))
+        Span::styled(" [A] ", Style::default().fg(t.success))
     } else {
-        Span::styled(" [a] ", Style::default().fg(Color::DarkGray))
+        Span::styled(" [a] ", Style::default().fg(t.muted))
     };
 
     let readings_indicator = if state.show_all_readings {
-        Span::styled("[R] ", Style::default().fg(Color::Green))
+        Span::styled("[R] ", Style::default().fg(t.success))
     } else {
-        Span::styled("[r] ", Style::default().fg(Color::DarkGray))
+        Span::styled("[r] ", Style::default().fg(t.muted))
     };
 
     let known_indicator = if state.show_known_in_sidebar {
-        Span::styled("[W] ", Style::default().fg(Color::Green))
+        Span::styled("[W] ", Style::default().fg(t.success))
     } else {
-        Span::styled("[w] ", Style::default().fg(Color::DarkGray))
+        Span::styled("[w] ", Style::default().fg(t.muted))
     };
 
     let translation_indicator = if state
         .sentence_translations
         .contains_key(&state.sentence_index)
     {
-        Span::styled("[翻] ", Style::default().fg(Color::Green))
+        Span::styled("[翻] ", Style::default().fg(t.success))
     } else {
         Span::raw("")
     };
@@ -123,11 +122,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         translation_indicator,
         Span::styled(
             " ↑↓:sent ←→:word 1-5:status t:translate T:sent-trans m:expr ",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.muted),
         ),
     ]);
     frame.render_widget(
-        Paragraph::new(status).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(status).style(Style::default().bg(t.title_bar_bg)),
         outer[2],
     );
 }
@@ -268,6 +267,7 @@ fn render_main_text(frame: &mut Frame, app: &App, state: &crate::app::ReaderStat
                 show_furigana,
                 is_current,
                 false,
+                &app.theme,
             );
         }
 

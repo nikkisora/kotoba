@@ -1,6 +1,6 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 
@@ -19,16 +19,15 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         return;
     }
 
+    let t = &app.theme;
     let sentence = &state.sentences[state.sentence_index];
 
     let block = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(t.muted))
         .title(Span::styled(
             " Sentence Details ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ));
 
     let inner = block.inner(area);
@@ -44,9 +43,7 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         inner.x + 1,
         header_label_y,
         "Current Sentence:",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
     );
 
     let sentence_area = Rect::new(
@@ -65,6 +62,7 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         show_furigana,
         false,
         state.show_all_readings,
+        t,
     );
 
     // --- Section 2: Word list + stats (rendered as Paragraph with wrap+scroll) ---
@@ -86,13 +84,11 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         if !trans.translation.is_empty() {
             lines.push(Line::from(Span::styled(
                 "Translation:",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.success).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(Span::styled(
                 &trans.translation,
-                Style::default().fg(Color::Green),
+                Style::default().fg(t.success),
             )));
             lines.push(Line::from(""));
         }
@@ -101,9 +97,7 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
     // Separator
     lines.push(Line::from(Span::styled(
         "Words:",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
     )));
 
     // Word list — by default hide Known and Ignored unless toggled.
@@ -226,12 +220,10 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
         );
 
         let style = if is_selected {
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(Color::Cyan)
+            Style::default().add_modifier(Modifier::BOLD).fg(t.accent)
         } else if is_known_or_ignored {
             // Dim Known/Ignored words when they are shown via toggle
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(t.muted)
         } else {
             Style::default()
         };
@@ -244,15 +236,15 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
     let new_count = sentence
         .tokens
         .iter()
-        .filter(|t| t.is_navigable() && t.vocabulary_status == VocabularyStatus::New)
+        .filter(|tok| tok.is_navigable() && tok.vocabulary_status == VocabularyStatus::New)
         .count();
     let learning = sentence
         .tokens
         .iter()
-        .filter(|t| {
-            t.is_navigable()
+        .filter(|tok| {
+            tok.is_navigable()
                 && matches!(
-                    t.vocabulary_status,
+                    tok.vocabulary_status,
                     VocabularyStatus::Learning1
                         | VocabularyStatus::Learning2
                         | VocabularyStatus::Learning3
@@ -263,15 +255,15 @@ pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
     let known = sentence
         .tokens
         .iter()
-        .filter(|t| t.is_navigable() && t.vocabulary_status == VocabularyStatus::Known)
+        .filter(|tok| tok.is_navigable() && tok.vocabulary_status == VocabularyStatus::Known)
         .count();
 
     lines.push(Line::from(vec![
-        Span::styled("N:", Style::default().fg(Color::Blue)),
+        Span::styled("N:", Style::default().fg(t.info)),
         Span::raw(format!("{} ", new_count)),
-        Span::styled("L:", Style::default().fg(Color::Yellow)),
+        Span::styled("L:", Style::default().fg(t.warning)),
         Span::raw(format!("{} ", learning)),
-        Span::styled("K:", Style::default().fg(Color::Green)),
+        Span::styled("K:", Style::default().fg(t.success)),
         Span::raw(format!("{}", known)),
     ]));
 

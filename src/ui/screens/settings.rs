@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -9,6 +9,7 @@ use crate::app::{App, SettingsValue};
 /// Render the settings screen.
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.size();
+    let t = &app.theme;
 
     let outer = Layout::vertical([
         Constraint::Length(1), // title
@@ -28,15 +29,13 @@ pub fn render(frame: &mut Frame, app: &App) {
     let title = Line::from(vec![
         Span::styled(
             " kotoba",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" — Settings"),
-        Span::styled(dirty_indicator, Style::default().fg(Color::Yellow)),
+        Span::styled(dirty_indicator, Style::default().fg(t.warning)),
     ]);
     frame.render_widget(
-        Paragraph::new(title).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(title).style(Style::default().bg(t.title_bar_bg)),
         outer[0],
     );
 
@@ -59,9 +58,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         .enumerate()
         .map(|(i, cat)| {
             let style = if i == state.selected_category {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -81,7 +78,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Block::default()
             .title(" Categories ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Blue)),
+            .border_style(Style::default().fg(t.info)),
     );
     frame.render_widget(cat_list, content[0]);
 
@@ -95,9 +92,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             .map(|(i, item)| {
                 let is_selected = i == state.selected_item;
                 let style = if is_selected {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
@@ -106,26 +101,26 @@ pub fn render(frame: &mut Frame, app: &App) {
                 let value_display = if is_selected && state.editing {
                     Span::styled(
                         format!("[{}▎]", state.edit_buffer),
-                        Style::default().fg(Color::Yellow),
+                        Style::default().fg(t.warning),
                     )
                 } else {
                     match &item.value {
                         SettingsValue::Bool(v) => {
                             if *v {
-                                Span::styled("[✓]", Style::default().fg(Color::Green))
+                                Span::styled("[✓]", Style::default().fg(t.success))
                             } else {
-                                Span::styled("[✗]", Style::default().fg(Color::Red))
+                                Span::styled("[✗]", Style::default().fg(t.error))
                             }
                         }
                         SettingsValue::Integer(v) => {
-                            Span::styled(format!("[{}]", v), Style::default().fg(Color::Yellow))
+                            Span::styled(format!("[{}]", v), Style::default().fg(t.warning))
                         }
                         SettingsValue::Text(v) => {
-                            Span::styled(format!("[{}]", v), Style::default().fg(Color::Yellow))
+                            Span::styled(format!("[{}]", v), Style::default().fg(t.warning))
                         }
                         SettingsValue::Choice(current, _options) => Span::styled(
                             format!("[◀ {} ▶]", current),
-                            Style::default().fg(Color::Cyan),
+                            Style::default().fg(t.accent),
                         ),
                     }
                 };
@@ -136,7 +131,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                     Span::raw("  "),
                     value_display,
                     Span::raw("  "),
-                    Span::styled(&item.description, Style::default().fg(Color::DarkGray)),
+                    Span::styled(&item.description, Style::default().fg(t.muted)),
                 ]))
             })
             .collect();
@@ -145,7 +140,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             Block::default()
                 .title(format!(" {} ", category.name))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Blue)),
+                .border_style(Style::default().fg(t.info)),
         );
         frame.render_widget(items_list, content[1]);
     }
@@ -159,10 +154,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     };
     let status = Line::from(vec![Span::styled(
         status_text,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(t.muted),
     )]);
     frame.render_widget(
-        Paragraph::new(status).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(status).style(Style::default().bg(t.title_bar_bg)),
         outer[2],
     );
 }

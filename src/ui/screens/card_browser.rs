@@ -42,6 +42,7 @@ fn pad_to_width(s: &str, target_width: usize) -> String {
 /// Render the card browser screen.
 pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.size();
+    let t = &app.theme;
 
     let outer = Layout::vertical([
         Constraint::Length(1), // title
@@ -61,7 +62,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let block = Block::default()
         .title(" SRS Cards ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Blue));
+        .border_style(Style::default().fg(t.info));
     let inner_area = block.inner(outer[1]);
 
     // header(1) + bottom page indicator(1) = 2 rows reserved
@@ -91,29 +92,27 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let title = Line::from(vec![
         Span::styled(
             " kotoba",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" — SRS Cards"),
         Span::raw("  "),
         Span::styled(
             format!("[{}]", filter_label),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(t.warning),
         ),
         Span::raw("  "),
         Span::styled(
             format!("Sort: {}", sort_label),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.muted),
         ),
         Span::raw("  "),
         Span::styled(
             format!("{}/{} cards", filtered_count, total),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.muted),
         ),
     ]);
     frame.render_widget(
-        Paragraph::new(title).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(title).style(Style::default().bg(t.title_bar_bg)),
         outer[0],
     );
 
@@ -125,7 +124,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             Line::from(""),
             Line::from(Span::styled(
                 "No SRS cards found.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.muted),
             )),
             Line::from(""),
             Line::from("Cards are created when you set words to Learning (1-4) in the Reader,"),
@@ -133,21 +132,17 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ]);
         frame.render_widget(msg, inner_area);
     } else {
-        // Fixed column widths (in terminal columns), including trailing space as separator.
-        // marker(2) + type(6) + front(variable) + translation(variable) + state(7) + due(10)
+        // Fixed column widths
         let col_type: usize = 6;
         let col_state: usize = 7;
         let col_due: usize = 10;
 
-        // Front and translation columns share remaining width (60/40 split)
         let fixed = 2 + col_type + col_state + col_due;
         let remaining = (inner_area.width as usize).saturating_sub(fixed).max(20);
         let col_front = (remaining * 55 / 100).max(10);
         let col_trans = remaining.saturating_sub(col_front).max(8);
 
-        let hdr_style = Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD);
+        let hdr_style = Style::default().fg(t.muted).add_modifier(Modifier::BOLD);
 
         // Header row
         let header = Line::from(vec![
@@ -173,9 +168,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 "  "
             };
             let style = if display_idx == selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -195,11 +188,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 s => s,
             };
             let state_color = match entry.card.state.as_str() {
-                "new" => Color::Blue,
-                "learning" => Color::Yellow,
-                "review" => Color::Green,
-                "relearning" => Color::Red,
-                "retired" => Color::DarkGray,
+                "new" => t.info,
+                "learning" => t.warning,
+                "review" => t.success,
+                "relearning" => t.error,
+                "retired" => t.muted,
                 _ => Color::White,
             };
 
@@ -207,12 +200,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 Span::styled(marker, style),
                 Span::styled(
                     pad_to_width(type_label, col_type),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 ),
                 Span::styled(pad_to_width(&entry.display_front, col_front), style),
                 Span::styled(
                     pad_to_width(&entry.display_back, col_trans),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 ),
                 Span::styled(
                     pad_to_width(state_label, col_state),
@@ -220,7 +213,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 ),
                 Span::styled(
                     pad_to_width(&entry.due_label, col_due),
-                    Style::default().fg(Color::Rgb(100, 180, 100)),
+                    Style::default().fg(t.progress_bar),
                 ),
             ])));
         }
@@ -228,7 +221,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         // Page indicator at the bottom
         let page_indicator = Line::from(vec![Span::styled(
             format!("  Page {}/{}", current_page, total_pages),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.muted),
         )]);
         items.push(ListItem::new(page_indicator));
 
@@ -239,10 +232,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Status bar
     let status = Line::from(vec![Span::styled(
         " ↑↓:navigate  ←→:page  Enter:detail  d:delete  r:reset  f:filter  s:sort  Esc:back ",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(t.muted),
     )]);
     frame.render_widget(
-        Paragraph::new(status).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(status).style(Style::default().bg(t.title_bar_bg)),
         outer[2],
     );
 }

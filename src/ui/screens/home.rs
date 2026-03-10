@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -19,6 +19,7 @@ fn progress_bar(current: u64, total: u64, width: usize) -> String {
 /// Render the home screen.
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.size();
+    let t = &app.theme;
 
     let outer = Layout::vertical([
         Constraint::Length(1), // title
@@ -35,9 +36,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             Span::raw("  "),
             Span::styled(
                 format!("[r] {} due", due_counts.0),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
             ),
         ]
     } else {
@@ -46,20 +45,52 @@ pub fn render(frame: &mut Frame, app: &App) {
     let mut title_spans = vec![
         Span::styled(
             " kotoba",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" — Home"),
         Span::raw("  "),
-        Span::styled("[?]help", Style::default().fg(Color::DarkGray)),
+        Span::styled("[?]help", Style::default().fg(t.muted)),
     ];
     title_spans.extend(review_indicator);
     let title = Line::from(title_spans);
     frame.render_widget(
-        Paragraph::new(title).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(title).style(Style::default().bg(t.title_bar_bg)),
         outer[0],
     );
+
+    // Dict warning banner
+    let dict_loaded = home.map(|h| h.dict_loaded).unwrap_or(true);
+    let content_area = if !dict_loaded {
+        let banner_split = Layout::vertical([
+            Constraint::Length(2), // warning banner
+            Constraint::Min(1),    // remaining content
+        ])
+        .split(outer[1]);
+
+        let banner = Paragraph::new(Line::from(vec![
+            Span::styled(
+                " ! ",
+                Style::default().fg(t.error).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Dictionary not loaded. Run ",
+                Style::default().fg(t.warning),
+            ),
+            Span::styled(
+                "kotoba setup-dict",
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " to download and import JMdict for word lookups.",
+                Style::default().fg(t.warning),
+            ),
+        ]))
+        .style(Style::default().bg(t.title_bar_bg));
+        frame.render_widget(banner, banner_split[0]);
+        banner_split[1]
+    } else {
+        outer[1]
+    };
 
     // Content
     let show_finished = home.map(|h| h.show_finished).unwrap_or(false);
@@ -87,26 +118,24 @@ pub fn render(frame: &mut Frame, app: &App) {
         let items: Vec<ListItem> = filtered
             .iter()
             .enumerate()
-            .map(|(i, t)| {
+            .map(|(i, text)| {
                 let marker = if i == selected { "▶ " } else { "  " };
                 let style = if i == selected {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
 
-                let progress = (t.last_sentence_index + 1).min(t.total_sentences);
-                let pbar = progress_bar(progress as u64, t.total_sentences as u64, 12);
-                let pct = if t.total_sentences > 0 {
-                    (progress * 100 / t.total_sentences) as u8
+                let progress = (text.last_sentence_index + 1).min(text.total_sentences);
+                let pbar = progress_bar(progress as u64, text.total_sentences as u64, 12);
+                let pct = if text.total_sentences > 0 {
+                    (progress * 100 / text.total_sentences) as u8
                 } else {
                     0
                 };
 
                 let stats_str = stats_map
-                    .and_then(|m| m.get(&t.id))
+                    .and_then(|m| m.get(&text.id))
                     .map(|s| {
                         let kpct = if s.unique_vocab == 0 {
                             0
@@ -129,13 +158,13 @@ pub fn render(frame: &mut Frame, app: &App) {
 
                 ListItem::new(Line::from(vec![
                     Span::styled(marker, style),
-                    Span::styled(&t.title, style),
+                    Span::styled(&text.title, style),
                     Span::raw("  "),
                     Span::styled(
                         format!("{} {}%", pbar, pct),
-                        Style::default().fg(Color::Rgb(100, 180, 100)),
+                        Style::default().fg(t.progress_bar),
                     ),
-                    Span::styled(stats_str, Style::default().fg(Color::Rgb(100, 140, 180))),
+                    Span::styled(stats_str, Style::default().fg(t.stats_text)),
                 ]))
             })
             .collect();
@@ -149,43 +178,54 @@ pub fn render(frame: &mut Frame, app: &App) {
             Block::default()
                 .title(block_title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Blue)),
+                .border_style(Style::default().fg(t.info)),
         );
-        frame.render_widget(list, outer[1]);
+        frame.render_widget(list, content_area);
     } else {
-        let msg = Paragraph::new(vec![
+        let mut welcome_lines = vec![
             Line::from(""),
             Line::from(Span::styled(
                 "Welcome to kotoba!",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
-            Line::from("No texts read yet. Get started:"),
+        ];
+
+        if !dict_loaded {
+            welcome_lines.push(Line::from(Span::styled(
+                "Set up the dictionary first:",
+                Style::default().fg(t.warning),
+            )));
+            welcome_lines.push(Line::from("  kotoba setup-dict"));
+            welcome_lines.push(Line::from(""));
+        }
+
+        welcome_lines.extend([
+            Line::from("Get started:"),
             Line::from("  [l] Open Library"),
             Line::from("  [i] Import text (clipboard, URL, file, Syosetu)"),
             Line::from(""),
             Line::from("Or use the CLI:"),
             Line::from("  kotoba import <file>"),
             Line::from("  kotoba syosetu <ncode>"),
-        ])
-        .block(
+        ]);
+
+        let msg = Paragraph::new(welcome_lines).block(
             Block::default()
                 .title(" Home ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Blue)),
+                .border_style(Style::default().fg(t.info)),
         );
-        frame.render_widget(msg, outer[1]);
+        frame.render_widget(msg, content_area);
     }
 
     // Status bar
     let status = Line::from(vec![Span::styled(
         " ↑↓:navigate  Enter:open  r:review  c:cards  s:settings  f:finished  l:library  i:import  Tab:reader  q:quit ",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(t.muted),
     )]);
     frame.render_widget(
-        Paragraph::new(status).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(status).style(Style::default().bg(t.title_bar_bg)),
         outer[2],
     );
 }

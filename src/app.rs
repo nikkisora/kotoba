@@ -10,6 +10,7 @@ use crate::core::tokenizer::{self, GroupToken};
 use crate::db::models::{
     self, AnswerMode, CardType, SrsCard, TextStats, Vocabulary, VocabularyStatus,
 };
+use crate::ui::theme::Theme;
 
 /// Compute a reasonable page_size for chapter select based on terminal height.
 /// Layout: 1 title bar + 4 source info + 2 list borders + 1 status bar = 8 fixed rows.
@@ -399,6 +400,8 @@ pub struct HomeState {
     pub show_finished: bool,
     /// Number of SRS cards due for review (due_total, due_new).
     pub due_card_counts: (usize, usize),
+    /// Whether the JMdict dictionary has been imported.
+    pub dict_loaded: bool,
 }
 
 /// Phase of the review card display.
@@ -609,6 +612,7 @@ pub struct App {
     pub screen: Screen,
     pub previous_screen: Option<Screen>,
     pub config: AppConfig,
+    pub theme: Theme,
     pub reader_state: Option<ReaderState>,
     pub library_state: Option<LibraryState>,
     pub chapter_select_state: Option<ChapterSelectState>,
@@ -640,10 +644,13 @@ pub struct App {
 impl App {
     pub fn new(config: AppConfig) -> Self {
         let db_path = config.db_path();
+        let mut theme = Theme::load(&config.general.theme, None);
+        theme.apply_color_fallback();
         Self {
             screen: Screen::Home,
             previous_screen: None,
             config,
+            theme,
             reader_state: None,
             library_state: None,
             chapter_select_state: None,
@@ -942,6 +949,14 @@ impl App {
         } else {
             models::get_due_card_counts(&conn).unwrap_or((0, 0))
         };
+        // Check if JMdict has been imported
+        let dict_loaded: bool = conn
+            .query_row("SELECT COUNT(*) FROM jmdict_entries LIMIT 1", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap_or(0)
+            > 0;
+
         let prev = self.home_state.as_ref();
         let show_finished = prev.map(|s| s.show_finished).unwrap_or(false);
         let selected = prev
@@ -953,6 +968,7 @@ impl App {
             selected,
             show_finished,
             due_card_counts,
+            dict_loaded,
         });
         Ok(())
     }
@@ -3345,7 +3361,24 @@ impl App {
         let srs = &self.config.srs;
         let reader = &self.config.reader;
 
+        let theme_names: Vec<String> = Theme::available_themes()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
         let categories = vec![
+            SettingsCategory {
+                name: "General".to_string(),
+                items: vec![SettingsItem {
+                    key: "general.theme".to_string(),
+                    label: "Theme".to_string(),
+                    description: "Color theme".to_string(),
+                    value: SettingsValue::Choice(
+                        self.config.general.theme.clone(),
+                        theme_names,
+                    ),
+                }],
+            },
             SettingsCategory {
                 name: "Reader".to_string(),
                 items: vec![
@@ -3494,6 +3527,16 @@ impl App {
                     "srs.sentence_cloze_ratio" => {
                         if let SettingsValue::Integer(v) = &item.value {
                             self.config.srs.sentence_cloze_ratio = (*v).max(0).min(100) as u32;
+                        }
+                    }
+                    "general.theme" => {
+                        if let SettingsValue::Choice(v, _) = &item.value {
+                            if v != &self.config.general.theme {
+                                self.config.general.theme = v.clone();
+                                let mut new_theme = Theme::load(v, None);
+                                new_theme.apply_color_fallback();
+                                self.theme = new_theme;
+                            }
                         }
                     }
                     _ => {}

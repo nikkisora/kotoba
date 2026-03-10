@@ -1,6 +1,7 @@
 pub mod components;
 pub mod events;
 pub mod screens;
+pub mod theme;
 
 use ratatui::widgets::Clear;
 use ratatui::Frame;
@@ -29,6 +30,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Render status bar message
     if let Some((ref msg, _)) = app.message {
-        components::status_bar::render_message(frame, msg);
+        components::status_bar::render_message(frame, msg, &app.theme);
     }
 }

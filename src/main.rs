@@ -13,6 +13,7 @@ use crossterm::terminal::{
 };
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Constraint, Layout};
 use ratatui::Terminal;
 use std::io::stdout;
 use std::path::PathBuf;
@@ -27,10 +28,18 @@ use ui::events::{Event, EventLoop};
 #[command(
     name = "kotoba",
     version,
-    about = "Terminal-based Japanese language learning app"
+    about = "Terminal-based Japanese language learning app",
+    long_about = "kotoba is a terminal-based Japanese language learning app.\n\n\
+                  It combines an immersive reader with SRS flashcard review,\n\
+                  vocabulary tracking, and dictionary lookup — all in the terminal.\n\n\
+                  Get started:\n  \
+                  kotoba setup-dict      Download the JMdict dictionary\n  \
+                  kotoba import <file>   Import a text (.txt, .epub, .srt, .ass)\n  \
+                  kotoba run             Launch the interactive TUI\n  \
+                  kotoba config          Show current configuration"
 )]
 struct Cli {
-    /// Path to config file
+    /// Path to config file (default: ~/.config/kotoba/kotoba.toml)
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
@@ -40,7 +49,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Import content for reading (auto-detects format: .txt, .srt, .ass, .epub)
+    /// Import content for reading
+    #[command(long_about = "Import content for reading.\n\n\
+                      Auto-detects format by file extension:\n  \
+                      .txt          Plain text\n  \
+                      .epub         EPUB ebook (imports all chapters)\n  \
+                      .srt          SubRip subtitles\n  \
+                      .ass / .ssa   Advanced SubStation Alpha subtitles\n\n\
+                      Content is tokenized and stored in the database for reading in the TUI.")]
     Import {
         /// Path to the file to import
         #[arg(group = "source")]
@@ -54,24 +70,45 @@ enum Commands {
         #[arg(long, group = "source")]
         url: Option<String>,
     },
-    /// Tokenize a Japanese text string
+    /// Tokenize a Japanese text string and show morphological analysis
     Tokenize {
         /// The Japanese text to tokenize
         text: String,
     },
-    /// Look up a word in JMdict
+    /// Look up a word in the JMdict dictionary
+    #[command(long_about = "Look up a word in the JMdict dictionary.\n\n\
+                      Searches by kanji and reading. Requires JMdict to be imported first\n\
+                      (run 'kotoba setup-dict' or 'kotoba import-dict <path>').")]
     Dict {
         /// The word to look up (kanji or kana)
         word: String,
     },
-    /// Import JMdict XML dictionary into the database
+    /// Import a JMdict XML file into the database
+    #[command(long_about = "Import a JMdict XML file into the database.\n\n\
+                      Use this if you already have JMdict_e.xml downloaded.\n\
+                      For automatic download, use 'kotoba setup-dict' instead.")]
     ImportDict {
         /// Path to JMdict_e.xml file
         path: PathBuf,
     },
     /// Download and set up the JMdict dictionary automatically
+    #[command(
+        long_about = "Download and set up the JMdict dictionary automatically.\n\n\
+                      Downloads JMdict_e.gz from the EDRDG FTP server, decompresses it,\n\
+                      and imports all entries into the database. This is required for\n\
+                      dictionary lookups to work in the reader.\n\n\
+                      The dictionary file is stored in the data directory\n\
+                      (default: ~/.local/share/kotoba/)."
+    )]
     SetupDict,
-    /// Import a Syosetu (小説家になろう) novel chapter
+    /// Import a Syosetu novel chapter
+    #[command(long_about = "Import a Syosetu (小説家になろう) novel chapter.\n\n\
+                      Fetches a chapter from syosetu.com, tokenizes it, and stores it\n\
+                      in the database. If no chapter number is given, shows the novel\n\
+                      info and chapter list.\n\n\
+                      Examples:\n  \
+                      kotoba syosetu n1234ab               List chapters\n  \
+                      kotoba syosetu n1234ab --chapter 1    Import chapter 1")]
     Syosetu {
         /// Novel URL or ncode (e.g. n1234ab)
         ncode: String,
@@ -80,8 +117,23 @@ enum Commands {
         #[arg(short, long)]
         chapter: Option<usize>,
     },
-    /// Launch the TUI reader
+    /// Launch the interactive TUI reader
+    #[command(long_about = "Launch the interactive TUI reader.\n\n\
+                      Opens the full-screen terminal interface with reader, sidebar,\n\
+                      SRS review, vocabulary tracking, and more.\n\n\
+                      Keybindings:\n  \
+                      ?              Show help overlay\n  \
+                      ↑↓             Navigate sentences\n  \
+                      ←→             Navigate words\n  \
+                      1-5            Set vocabulary status\n  \
+                      Tab            Toggle reader\n  \
+                      q              Quit")]
     Run,
+    /// Show config file location and current settings
+    #[command(long_about = "Show config file location and current settings.\n\n\
+                      Displays the resolved paths for config and data directories,\n\
+                      and prints all current configuration values.")]
+    Config,
 }
 
 fn main() -> Result<()> {
@@ -207,6 +259,72 @@ fn main() -> Result<()> {
             drop(conn); // Close CLI connection; TUI opens its own
             run_tui(cfg)?;
         }
+        Commands::Config => {
+            // Print config file location
+            let config_path = dirs::config_dir()
+                .map(|d| d.join("kotoba").join("kotoba.toml"))
+                .unwrap_or_else(|| PathBuf::from("kotoba.toml"));
+            let data_dir = dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("kotoba");
+
+            println!("Config file:  {}", config_path.display());
+            if config_path.exists() {
+                println!("  (exists)");
+            } else {
+                println!("  (not found — using defaults)");
+            }
+            println!();
+            println!("Data dir:     {}", data_dir.display());
+            println!("Database:     {}", cfg.db_path().display());
+            println!();
+            println!("Current settings:");
+            println!("  [general]");
+            println!("    theme             = {}", cfg.general.theme);
+            println!(
+                "    db_path           = {}",
+                cfg.general
+                    .db_path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(default)".into())
+            );
+            println!();
+            println!("  [reader]");
+            println!("    sidebar_width     = {}", cfg.reader.sidebar_width);
+            println!("    furigana          = {}", cfg.reader.furigana);
+            println!("    sentence_gaps     = {}", cfg.reader.sentence_gaps);
+            println!("    preprocess_ahead  = {}", cfg.reader.preprocess_ahead);
+            println!();
+            println!("  [srs]");
+            println!("    new_cards_per_day  = {}", cfg.srs.new_cards_per_day);
+            println!(
+                "    max_reviews        = {}",
+                cfg.srs.max_reviews_per_session
+            );
+            println!("    review_order       = {}", cfg.srs.review_order);
+            println!("    require_typed      = {}", cfg.srs.require_typed_input);
+            println!("    sentence_cloze     = {}", cfg.srs.enable_sentence_cloze);
+            println!("    cloze_ratio        = {}%", cfg.srs.sentence_cloze_ratio);
+            println!();
+            println!("  [llm]");
+            println!("    endpoint          = {}", cfg.llm.endpoint);
+            println!(
+                "    api_key           = {}",
+                if cfg.llm.api_key.is_empty() {
+                    "(not set)"
+                } else {
+                    "***"
+                }
+            );
+            println!("    model             = {}", cfg.llm.model);
+            println!("    max_tokens        = {}", cfg.llm.max_tokens);
+            println!();
+            println!(
+                "Available themes: {}",
+                ui::theme::Theme::available_themes().join(", ")
+            );
+        }
     }
 
     Ok(())
@@ -256,7 +374,9 @@ fn run_tui(config: config::AppConfig) -> Result<()> {
                 app.tick();
             }
             Event::Resize(_, _) => {}
-            Event::Mouse(_) => {}
+            Event::Mouse(mouse) => {
+                handle_mouse_event(&mut app, mouse, &terminal);
+            }
             Event::Import(evt) => {
                 app.handle_import_event(evt);
             }
@@ -366,6 +486,205 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
         Screen::Review => handle_review_key(app, key),
         Screen::CardBrowser => handle_card_browser_key(app, key),
         Screen::Settings => handle_settings_key(app, key),
+    }
+}
+
+/// Handle mouse events — currently only supports clicking on words in the Reader.
+fn handle_mouse_event(
+    app: &mut App,
+    mouse: crossterm::event::MouseEvent,
+    terminal: &Terminal<CrosstermBackend<std::io::Stdout>>,
+) {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    if app.screen != Screen::Reader {
+        return;
+    }
+    // Don't handle clicks when a popup is open
+    if app.popup.is_some() {
+        return;
+    }
+
+    // Scroll wheel: navigate sentences
+    match mouse.kind {
+        MouseEventKind::ScrollUp => {
+            if let Some(ref mut state) = app.reader_state {
+                if state.sentence_index > 0 {
+                    state.sentence_index -= 1;
+                    state.word_index = None;
+                    state.expression_mark = None;
+                    let _ = app.save_reading_progress();
+                }
+            }
+            return;
+        }
+        MouseEventKind::ScrollDown => {
+            if let Some(ref mut state) = app.reader_state {
+                if state.sentence_index + 1 < state.sentences.len() {
+                    state.sentence_index += 1;
+                    state.word_index = None;
+                    state.expression_mark = None;
+                    let _ = app.save_reading_progress();
+                }
+            }
+            return;
+        }
+        MouseEventKind::Down(MouseButton::Left) => {}
+        _ => return,
+    }
+
+    let state = match app.reader_state.as_ref() {
+        Some(s) => s,
+        None => return,
+    };
+    if state.sentences.is_empty() {
+        return;
+    }
+
+    let term_size = match terminal.size() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    // Recompute the reader layout areas (must match reader.rs render logic exactly)
+    let outer = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .split(term_size);
+
+    let sidebar_pct = app.config.reader.sidebar_width;
+    let content = Layout::horizontal([
+        Constraint::Percentage(100 - sidebar_pct),
+        Constraint::Percentage(sidebar_pct),
+    ])
+    .split(outer[1]);
+
+    let inner = content[0]; // Main text area (no borders)
+
+    // Check if click is inside the main text area
+    if mouse.column < inner.x
+        || mouse.column >= inner.x + inner.width
+        || mouse.row < inner.y
+        || mouse.row >= inner.y + inner.height
+    {
+        return;
+    }
+
+    // Recompute scroll offset and sentence positions (mirrors render_main_text logic)
+    let show_furigana = app.config.reader.furigana;
+    let sentence_gaps = app.config.reader.sentence_gaps;
+    let mut sentence_heights: Vec<u16> = Vec::new();
+    let mut gaps: Vec<u16> = Vec::new();
+    let mut prev_para: Option<usize> = None;
+
+    for (sent_idx, sentence) in state.sentences.iter().enumerate() {
+        let gap: u16 = if let Some(pp) = prev_para {
+            if sentence.paragraph_idx != pp {
+                1
+            } else if sentence_gaps {
+                1
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        gaps.push(gap);
+
+        let is_current = sent_idx == state.sentence_index;
+        let h = ui::components::furigana::sentence_height(
+            &sentence.tokens,
+            inner.width,
+            show_furigana,
+            is_current,
+            false,
+        );
+        sentence_heights.push(h);
+        prev_para = Some(sentence.paragraph_idx);
+    }
+
+    let total_height: u16 = sentence_heights.iter().sum::<u16>() + gaps.iter().sum::<u16>();
+    let current_y: u16 = sentence_heights[..state.sentence_index].iter().sum::<u16>()
+        + gaps[..state.sentence_index].iter().sum::<u16>();
+    let current_h = sentence_heights[state.sentence_index];
+
+    let target_y = if total_height <= inner.height {
+        0
+    } else {
+        let center = inner.height / 2;
+        let ideal = current_y.saturating_sub(center.saturating_sub(current_h / 2));
+        ideal.min(total_height.saturating_sub(inner.height))
+    };
+
+    // Walk sentences to find which one the click falls into
+    let mut y_pos: i32 = -(target_y as i32);
+
+    for (sent_idx, sentence) in state.sentences.iter().enumerate() {
+        y_pos += gaps[sent_idx] as i32;
+        let h = sentence_heights[sent_idx];
+
+        if y_pos + h as i32 <= 0 {
+            y_pos += h as i32;
+            continue;
+        }
+        if y_pos >= inner.height as i32 {
+            break;
+        }
+
+        let render_y = y_pos.max(0) as u16;
+        let available_height = inner.height.saturating_sub(render_y);
+        if available_height == 0 {
+            y_pos += h as i32;
+            continue;
+        }
+
+        let render_area = ratatui::layout::Rect {
+            x: inner.x,
+            y: inner.y + render_y,
+            width: inner.width,
+            height: available_height,
+        };
+
+        let is_current = sent_idx == state.sentence_index;
+
+        if let Some(token_idx) = ui::components::furigana::hit_test_sentence(
+            &sentence.tokens,
+            render_area,
+            mouse.column,
+            mouse.row,
+            show_furigana,
+            is_current,
+        ) {
+            // Resolve to navigable token: if clicked token is in a group,
+            // select the group head. If trivial, still select it (user intent).
+            let tok = &sentence.tokens[token_idx];
+            let nav_idx = if let Some(gid) = tok.group_id {
+                // Find the group head
+                sentence
+                    .tokens
+                    .iter()
+                    .position(|t| t.group_id == Some(gid) && t.is_group_head)
+                    .unwrap_or(token_idx)
+            } else {
+                token_idx
+            };
+
+            // Update state
+            let state = app.reader_state.as_mut().unwrap();
+            if sent_idx != state.sentence_index {
+                state.sentence_index = sent_idx;
+                state.word_index = Some(nav_idx);
+                state.expression_mark = None;
+                let _ = app.save_reading_progress();
+            } else {
+                state.word_index = Some(nav_idx);
+            }
+            return;
+        }
+
+        y_pos += h as i32;
     }
 }
 
@@ -615,8 +934,16 @@ fn handle_settings_key(app: &mut App, key: KeyEvent) {
                             let next_idx = (idx + 1) % options.len();
                             let new_val = options[next_idx].clone();
                             let opts = options.clone();
-                            setting.value = app::SettingsValue::Choice(new_val, opts);
+                            let key = setting.key.clone();
+                            setting.value = app::SettingsValue::Choice(new_val.clone(), opts);
                             state.dirty = true;
+
+                            // Live-preview theme changes
+                            if key == "general.theme" {
+                                let mut new_theme = crate::ui::theme::Theme::load(&new_val, None);
+                                new_theme.apply_color_fallback();
+                                app.theme = new_theme;
+                            }
                         }
                         app::SettingsValue::Integer(v) => {
                             state.edit_buffer = v.to_string();

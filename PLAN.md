@@ -80,28 +80,30 @@ Everything below is **not yet implemented**. For a description of what the app c
 **Goal**: Customization, UX refinements, and release readiness.
 
 ### 7.1 Theming Engine
-- [ ] Implement theme loading from `theme.toml`:
+- [x] Implement theme loading from `theme.toml`:
   - Parse hex colors into `Color::Rgb(r, g, b)`
   - Provide 2-3 built-in themes: Tokyo Night (dark), Solarized Light, Gruvbox
   - Fallback to 256-color or 16-color palette if terminal doesn't support RGB
+- [x] Thread theme through all 14 UI files, replacing all hardcoded colors
+- [x] Theme selection in Settings screen with live preview
 
 ### 7.2 Configuration
-- [ ] CLI command `kotoba config` — print current config location and values
-- [ ] XDG-compliant paths: config in `$XDG_CONFIG_HOME/kotoba/`, data in `$XDG_DATA_HOME/kotoba/`
+- [x] CLI command `kotoba config` — print current config location and values
+- [x] XDG-compliant paths: config in `$XDG_CONFIG_HOME/kotoba/`, data in `$XDG_DATA_HOME/kotoba/`
 
 ### 7.3 UX Polish
-- [ ] Consistent popup system: all popups use same border style, close with `Esc`, support scrolling
-- [ ] Error handling: user-friendly error messages in status bar (not panics)
+- [x] Consistent popup system: all popups use same border style, close with `Esc`, support scrolling
+- [x] Error handling: user-friendly error messages in status bar (not panics)
 - [ ] Loading states: spinner for any operation > 200ms
-- [ ] First-run experience: detect missing DB / JMdict, prompt to run `kotoba init` or auto-initialize
-- [ ] Mouse support (optional): click on words in Reader to select them
+- [x] First-run experience: detect missing JMdict, show warning banner on home screen
+- [x] Mouse support: click on words in Reader to select them, scroll wheel to navigate sentences
 
 ### 7.4 Build & Distribution
-- [ ] `cargo build --release` — single static binary
-- [ ] GitHub Actions CI: build for Linux (x86_64, aarch64), macOS (x86_64, aarch64), Windows (x86_64)
-- [ ] Include JMdict download script or bundle instructions
-- [ ] Write `--help` text for all CLI subcommands
-- [ ] Man page generation via `clap_mangen` (optional)
+- [x] `cargo build --release` — single static binary
+- [x] GitHub Actions CI: build for Linux (x86_64, aarch64), macOS (x86_64, aarch64), Windows (x86_64)
+- [x] Include JMdict download via `kotoba setup-dict` command
+- [x] Write `--help` text for all CLI subcommands (with long_about descriptions)
+- [ ] Man page generation via `clap_mangen` (requires lib+bin restructure)
 
 ---
 

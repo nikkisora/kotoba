@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -32,6 +32,7 @@ fn progress_bar(current: u64, total: u64, width: usize) -> String {
 /// Render the library screen showing imported texts and sources.
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.size();
+    let t = &app.theme;
 
     let outer = Layout::vertical([
         Constraint::Length(1), // title
@@ -52,26 +53,24 @@ pub fn render(frame: &mut Frame, app: &App) {
     let title = Line::from(vec![
         Span::styled(
             " kotoba",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" — Library"),
         Span::raw("  "),
         Span::styled(
             format!("sort:{}", sort_label),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(t.warning),
         ),
         Span::raw("  "),
         Span::styled(
             format!("filter:{}", filter_label),
-            Style::default().fg(Color::Green),
+            Style::default().fg(t.success),
         ),
         Span::raw("  "),
-        Span::styled("[?]help", Style::default().fg(Color::DarkGray)),
+        Span::styled("[?]help", Style::default().fg(t.muted)),
     ]);
     frame.render_widget(
-        Paragraph::new(title).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(title).style(Style::default().bg(t.title_bar_bg)),
         outer[0],
     );
 
@@ -92,11 +91,11 @@ pub fn render(frame: &mut Frame, app: &App) {
                 .map(|label| {
                     ListItem::new(Line::from(vec![
                         Span::raw("  "),
-                        Span::styled(format!("{} ", spinner), Style::default().fg(Color::Yellow)),
+                        Span::styled(format!("{} ", spinner), Style::default().fg(t.warning)),
                         Span::styled(
                             format!("Importing: {}", label),
                             Style::default()
-                                .fg(Color::Yellow)
+                                .fg(t.warning)
                                 .add_modifier(Modifier::ITALIC),
                         ),
                     ]))
@@ -107,26 +106,24 @@ pub fn render(frame: &mut Frame, app: &App) {
             list_items.extend(items.iter().enumerate().map(|(i, item)| {
                 let marker = if i == selected { "▶ " } else { "  " };
                 let style = if i == selected {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
                 let icon = source_icon(item.source_type());
 
                 let detail_str = match item {
-                    LibraryItem::Text(t) => {
-                        let progress = (t.last_sentence_index + 1).min(t.total_sentences);
-                        let pbar = progress_bar(progress as u64, t.total_sentences as u64, 10);
-                        let pct = if t.total_sentences > 0 {
-                            (progress * 100 / t.total_sentences) as u8
+                    LibraryItem::Text(text) => {
+                        let progress = (text.last_sentence_index + 1).min(text.total_sentences);
+                        let pbar = progress_bar(progress as u64, text.total_sentences as u64, 10);
+                        let pct = if text.total_sentences > 0 {
+                            (progress * 100 / text.total_sentences) as u8
                         } else {
                             0
                         };
 
                         let word_stats = stats_map
-                            .and_then(|m| m.get(&t.id))
+                            .and_then(|m| m.get(&text.id))
                             .map(|s| {
                                 let kpct = if s.unique_vocab == 0 {
                                     0
@@ -166,9 +163,9 @@ pub fn render(frame: &mut Frame, app: &App) {
                     Span::styled(item.title(), style),
                     Span::styled(
                         format!("  [{}]  {}", item.source_type(), date_str),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(t.muted),
                     ),
-                    Span::styled(detail_str, Style::default().fg(Color::Rgb(100, 140, 180))),
+                    Span::styled(detail_str, Style::default().fg(t.stats_text)),
                 ]))
             }));
 
@@ -177,7 +174,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                 Block::default()
                     .title(count_label)
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Blue)),
+                    .border_style(Style::default().fg(t.info)),
             );
             frame.render_widget(list, outer[1]);
         }
@@ -186,7 +183,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                 Line::from(""),
                 Line::from(Span::styled(
                     "No texts imported yet.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
                 Line::from(""),
                 Line::from("Import a text:"),
@@ -201,7 +198,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                 Block::default()
                     .title(" Library ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Blue)),
+                    .border_style(Style::default().fg(t.info)),
             );
             frame.render_widget(msg, outer[1]);
         }
@@ -212,11 +209,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     let status = Line::from(vec![
         Span::styled(
             " ↑↓:navigate  Enter:open  d:delete  i:import  /:search  s:sort  f:filter  Esc:home  Tab:reader  q:quit ",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.muted),
         ),
     ]);
     frame.render_widget(
-        Paragraph::new(status).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(status).style(Style::default().bg(t.title_bar_bg)),
         outer[2],
     );
 }

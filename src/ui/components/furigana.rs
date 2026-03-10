@@ -1,27 +1,24 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::TokenDisplay;
 use crate::db::models::VocabularyStatus;
+use crate::ui::theme::Theme;
 
-/// Get the color for a vocabulary status.
-pub fn status_style(status: VocabularyStatus, is_selected: bool) -> Style {
+/// Get the color for a vocabulary status in reader (inline text highlighting).
+pub fn status_style(status: VocabularyStatus, is_selected: bool, theme: &Theme) -> Style {
     let base = match status {
-        VocabularyStatus::New => Style::default().bg(Color::Blue).fg(Color::White),
-        VocabularyStatus::Learning1 => Style::default().bg(Color::Yellow).fg(Color::Black),
-        VocabularyStatus::Learning2 => Style::default()
-            .bg(Color::Rgb(200, 180, 60))
-            .fg(Color::Black),
-        VocabularyStatus::Learning3 => Style::default()
-            .bg(Color::Rgb(160, 150, 80))
-            .fg(Color::Black),
-        VocabularyStatus::Learning4 => Style::default()
-            .bg(Color::Rgb(120, 120, 100))
-            .fg(Color::White),
+        VocabularyStatus::New => Style::default()
+            .bg(theme.vocab_new_bg)
+            .fg(theme.vocab_new_fg),
+        VocabularyStatus::Learning1 => Style::default().bg(theme.vocab_l1_bg).fg(theme.vocab_l1_fg),
+        VocabularyStatus::Learning2 => Style::default().bg(theme.vocab_l2_bg).fg(theme.vocab_l2_fg),
+        VocabularyStatus::Learning3 => Style::default().bg(theme.vocab_l3_bg).fg(theme.vocab_l3_fg),
+        VocabularyStatus::Learning4 => Style::default().bg(theme.vocab_l4_bg).fg(theme.vocab_l4_fg),
         VocabularyStatus::Known => Style::default(),
-        VocabularyStatus::Ignored => Style::default().fg(Color::DarkGray),
+        VocabularyStatus::Ignored => Style::default().fg(theme.vocab_ignored_fg),
     };
 
     if is_selected {
@@ -80,6 +77,8 @@ struct Slot {
     slot_width: usize,
     needs_furigana: bool,
     style: Style,
+    /// Original token indices that this slot covers (for mouse hit-testing).
+    token_indices: Vec<usize>,
 }
 
 /// Build layout slots from tokens, merging consecutive tokens that share the same
@@ -89,6 +88,7 @@ fn build_slots(
     tokens: &[TokenDisplay],
     show_furigana: bool,
     force_all_furigana: bool,
+    theme: &Theme,
 ) -> Vec<Slot> {
     let mut slots: Vec<Slot> = Vec::new();
     let mut i = 0;
@@ -118,7 +118,7 @@ fn build_slots(
                     Style::default()
                 }
             } else {
-                status_style(head.vocabulary_status, any_selected)
+                status_style(head.vocabulary_status, any_selected, theme)
             };
 
             for member in group {
@@ -154,6 +154,7 @@ fn build_slots(
                 slot_width,
                 needs_furigana,
                 style,
+                token_indices: (group_start..i).collect(),
             });
         } else {
             // Standalone token — same logic as before
@@ -173,7 +174,7 @@ fn build_slots(
                     Style::default()
                 }
             } else {
-                status_style(t.vocabulary_status, t.is_selected)
+                status_style(t.vocabulary_status, t.is_selected, theme)
             };
 
             slots.push(Slot {
@@ -184,6 +185,7 @@ fn build_slots(
                 slot_width,
                 needs_furigana,
                 style,
+                token_indices: vec![i],
             });
             i += 1;
         }
@@ -250,7 +252,9 @@ pub fn sentence_height(
     }
 
     let usable_width = width as usize;
-    let slots = build_slots(tokens, show_furigana, force_all_furigana);
+    // Use a default theme for height calculation — only layout matters, not colors
+    let default_theme = Theme::tokyo_night();
+    let slots = build_slots(tokens, show_furigana, force_all_furigana, &default_theme);
     let text_width = usable_width.saturating_sub(if is_current { 2 } else { 0 });
     if text_width == 0 {
         return 1;
@@ -277,13 +281,14 @@ pub fn render_sentence(
     show_furigana: bool,
     is_current: bool,
     force_all_furigana: bool,
+    theme: &Theme,
 ) -> u16 {
     if area.width < 2 || area.height < 1 {
         return 0;
     }
 
     let usable_width = area.width as usize;
-    let slots = build_slots(tokens, show_furigana, force_all_furigana);
+    let slots = build_slots(tokens, show_furigana, force_all_furigana, theme);
     let text_width = usable_width.saturating_sub(if is_current { 2 } else { 0 });
     let text_x = area.x + if is_current { 2 } else { 0 };
 
@@ -299,7 +304,7 @@ pub fn render_sentence(
                 area.y
             };
             if marker_y < area.y + area.height {
-                buf.set_string(area.x, marker_y, "▶", Style::default().fg(Color::Cyan));
+                buf.set_string(area.x, marker_y, "▶", Style::default().fg(theme.accent));
             }
         }
     }
@@ -333,7 +338,7 @@ pub fn render_sentence(
                         x + pad as u16,
                         furigana_y,
                         &slot.reading,
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.muted),
                     );
                 }
             }
@@ -362,4 +367,87 @@ pub fn render_sentence(
     }
 
     total_rows
+}
+
+/// Given a click position (column, row) and the same parameters used for rendering,
+/// return the token index under that position (if any).
+///
+/// Uses the same layout algorithm as `render_sentence` / `sentence_height` to map
+/// screen coordinates back to token indices. Returns the first token in the slot
+/// (which is the group head for merged groups).
+pub fn hit_test_sentence(
+    tokens: &[TokenDisplay],
+    area: Rect,
+    click_col: u16,
+    click_row: u16,
+    show_furigana: bool,
+    is_current: bool,
+) -> Option<usize> {
+    if area.width < 2 || area.height < 1 {
+        return None;
+    }
+    // Quick bounds check
+    if click_col < area.x
+        || click_col >= area.x + area.width
+        || click_row < area.y
+        || click_row >= area.y + area.height
+    {
+        return None;
+    }
+
+    let default_theme = Theme::tokyo_night();
+    let usable_width = area.width as usize;
+    let slots = build_slots(tokens, show_furigana, false, &default_theme);
+    let text_width = usable_width.saturating_sub(if is_current { 2 } else { 0 });
+    let text_x = area.x + if is_current { 2 } else { 0 };
+
+    if text_width == 0 {
+        return None;
+    }
+
+    let lines = compute_lines(&slots, text_width);
+
+    let mut y_pos: u16 = 0;
+
+    for line in &lines {
+        let line_height: u16 = if line.has_furigana { 2 } else { 1 };
+        let current_line_y = area.y + y_pos;
+
+        // Surface text row
+        let text_y = if line.has_furigana {
+            current_line_y + 1
+        } else {
+            current_line_y
+        };
+
+        // Check if click_row is on the surface row of this line
+        if click_row == text_y {
+            let mut col: usize = 0;
+            for slot in &slots[line.start..line.end] {
+                let x = text_x + col as u16;
+                let slot_end = x + slot.slot_width as u16;
+                if click_col >= x && click_col < slot_end {
+                    // Found the slot — return the first token index (group head)
+                    return slot.token_indices.first().copied();
+                }
+                col += slot.slot_width;
+            }
+        }
+        // Also check furigana row (clicking reading should select the word too)
+        if line.has_furigana && click_row == current_line_y {
+            let mut col: usize = 0;
+            for slot in &slots[line.start..line.end] {
+                let x = text_x + col as u16;
+                let slot_end = x + slot.slot_width as u16;
+                if click_col >= x && click_col < slot_end && slot.needs_furigana {
+                    return slot.token_indices.first().copied();
+                }
+                col += slot.slot_width;
+            }
+        }
+
+        y_pos += line_height;
+    }
+
+    None
 }

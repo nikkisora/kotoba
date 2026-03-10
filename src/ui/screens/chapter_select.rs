@@ -9,12 +9,13 @@ use crate::app::{App, ChapterReadState};
 /// Render the chapter select screen.
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.size();
+    let t = &app.theme;
 
     let state = match app.chapter_select_state.as_ref() {
         Some(s) => s,
         None => {
             // Should not happen but handle gracefully
-            super::placeholder::render(frame, "Chapters", "No source loaded");
+            super::placeholder::render(frame, "Chapters", "No source loaded", &app.theme);
             return;
         }
     };
@@ -31,9 +32,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     let title = Line::from(vec![
         Span::styled(
             " kotoba",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" — Chapters"),
         Span::raw("  "),
@@ -43,13 +42,13 @@ pub fn render(frame: &mut Frame, app: &App) {
                 state.current_page_display(),
                 state.total_pages()
             ),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(t.warning),
         ),
         Span::raw("  "),
-        Span::styled("[?]help", Style::default().fg(Color::DarkGray)),
+        Span::styled("[?]help", Style::default().fg(t.muted)),
     ]);
     frame.render_widget(
-        Paragraph::new(title).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(title).style(Style::default().bg(t.title_bar_bg)),
         outer[0],
     );
 
@@ -58,14 +57,12 @@ pub fn render(frame: &mut Frame, app: &App) {
         Line::from(vec![
             Span::styled(
                 &state.source.title,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
             Span::styled(
                 format!("[{}]", state.source.source_type),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.muted),
             ),
         ]),
         Line::from(vec![Span::raw(format!(
@@ -76,7 +73,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Blue)),
+            .border_style(Style::default().fg(t.info)),
     );
     frame.render_widget(info, outer[1]);
 
@@ -87,28 +84,28 @@ pub fn render(frame: &mut Frame, app: &App) {
             Line::from(""),
             Line::from(Span::styled(
                 format!("  {} Fetching novel info from Syosetu...", spinner),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(t.warning),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "  This may take a moment for novels with many chapters.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.muted),
             )),
         ])
         .block(
             Block::default()
                 .title(" Chapters ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Blue)),
+                .border_style(Style::default().fg(t.info)),
         );
         frame.render_widget(loading_msg, outer[2]);
 
         let status = Line::from(vec![Span::styled(
             " Esc:back  q:quit ",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.muted),
         )]);
         frame.render_widget(
-            Paragraph::new(status).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+            Paragraph::new(status).style(Style::default().bg(t.title_bar_bg)),
             outer[3],
         );
         return;
@@ -134,9 +131,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                     Span::raw("  "),
                     Span::styled(
                         format!("── {} ──", ch.chapter_group),
-                        Style::default()
-                            .fg(Color::Magenta)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(t.subtle).add_modifier(Modifier::BOLD),
                     ),
                 ])));
             }
@@ -153,54 +148,42 @@ pub fn render(frame: &mut Frame, app: &App) {
         let is_preprocessing = app.preprocessing_chapters.contains(&ch.id);
         let read_state = state.chapter_read_states.get(&ch.id).copied();
 
-        // 5 distinct states:
-        // S (red/dim)      = Skipped
-        // ⠋ (yellow)       = Preprocessing (animated spinner)
-        // — (dark gray)    = Not imported
-        // ○ (white)        = Imported, unread
-        // ◐ (blue)         = In progress
-        // ● (green)        = Finished
         let spinner_str = app.spinner_char().to_string();
         let progress_info = app.preprocessing_progress.get(&ch.id).copied();
         let (status_icon, status_style) = if ch.is_skipped {
             (
                 "S".to_string(),
-                Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
+                Style::default().fg(t.error).add_modifier(Modifier::DIM),
             )
         } else if is_preprocessing {
             let pct_str = match progress_info {
                 Some((_phase, pct)) => format!("{} {}%", spinner_str, pct),
                 None => spinner_str,
             };
-            (pct_str, Style::default().fg(Color::Yellow))
+            (pct_str, Style::default().fg(t.warning))
         } else {
             match read_state {
                 Some(ChapterReadState::Finished) => {
-                    ("●".to_string(), Style::default().fg(Color::Green))
+                    ("●".to_string(), Style::default().fg(t.success))
                 }
-                Some(ChapterReadState::InProgress) => (
-                    "◐".to_string(),
-                    Style::default().fg(Color::Rgb(100, 150, 255)),
-                ),
+                Some(ChapterReadState::InProgress) => {
+                    ("◐".to_string(), Style::default().fg(t.chapter_in_progress))
+                }
                 Some(ChapterReadState::Unread) => {
                     ("○".to_string(), Style::default().fg(Color::White))
                 }
-                _ => ("—".to_string(), Style::default().fg(Color::DarkGray)),
+                _ => ("—".to_string(), Style::default().fg(t.muted)),
             }
         };
 
         let base_style = if ch.is_skipped {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(t.muted)
         } else if is_selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
         } else {
             match read_state {
-                Some(ChapterReadState::Finished) => Style::default().fg(Color::Green),
-                Some(ChapterReadState::InProgress) => {
-                    Style::default().fg(Color::Rgb(100, 150, 255))
-                }
+                Some(ChapterReadState::Finished) => Style::default().fg(t.success),
+                Some(ChapterReadState::InProgress) => Style::default().fg(t.chapter_in_progress),
                 _ => Style::default(),
             }
         };
@@ -210,7 +193,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             Span::styled(format!("[{}] ", &status_icon), status_style),
             Span::styled(
                 format!("{:>4}. ", ch.chapter_number),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.muted),
             ),
             Span::styled(&ch.title, base_style),
         ])));
@@ -236,7 +219,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Block::default()
             .title(list_title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Blue)),
+            .border_style(Style::default().fg(t.info)),
     );
     frame.render_widget(list, outer[2]);
 
@@ -252,10 +235,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     };
     let status = Line::from(vec![Span::styled(
         status_text,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(t.muted),
     )]);
     frame.render_widget(
-        Paragraph::new(status).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(status).style(Style::default().bg(t.title_bar_bg)),
         outer[2 + 1], // index 3
     );
 }

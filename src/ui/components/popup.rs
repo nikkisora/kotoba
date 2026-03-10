@@ -7,7 +7,9 @@ use ratatui::Frame;
 use crate::app::{App, PopupState};
 
 /// Render a popup overlay.
-pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
+pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
+    let t = &app.theme;
+
     match popup {
         PopupState::WordDetail {
             base_form,
@@ -26,12 +28,10 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             lines.push(Line::from(vec![
                 Span::styled(
                     base_form,
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
-                Span::styled(reading, Style::default().fg(Color::DarkGray)),
+                Span::styled(reading, Style::default().fg(t.muted)),
             ]));
             lines.push(Line::from(""));
 
@@ -39,19 +39,19 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             if entries.is_empty() {
                 lines.push(Line::from(Span::styled(
                     "No dictionary entries found",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )));
             } else {
                 for entry in entries {
                     if !entry.kanji_forms.is_empty() {
                         lines.push(Line::from(Span::styled(
                             format!("Kanji: {}", entry.kanji_forms.join(", ")),
-                            Style::default().fg(Color::Yellow),
+                            Style::default().fg(t.warning),
                         )));
                     }
                     lines.push(Line::from(Span::styled(
                         format!("Readings: {}", entry.readings.join(", ")),
-                        Style::default().fg(Color::Green),
+                        Style::default().fg(t.success),
                     )));
 
                     for (i, sense) in entry.senses.iter().enumerate() {
@@ -77,9 +77,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             if !conjugations.is_empty() {
                 lines.push(Line::from(Span::styled(
                     "Encountered Forms:",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
                 )));
                 for (surface, count) in conjugations {
                     lines.push(Line::from(format!("  {} (×{})", surface, count)));
@@ -92,9 +90,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 if !notes_text.is_empty() {
                     lines.push(Line::from(Span::styled(
                         "Notes:",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
                     )));
                     lines.push(Line::from(notes_text.as_str()));
                     lines.push(Line::from(""));
@@ -102,19 +98,17 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             }
 
             lines.push(Line::from(Span::styled(
-                "Press Esc or Enter to close",
-                Style::default().fg(Color::DarkGray),
+                "Press Esc or Enter to close • ↑↓ to scroll",
+                Style::default().fg(t.muted),
             )));
 
             let block = Block::default()
                 .title(Span::styled(
                     " Word Detail ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Blue));
+                .border_style(Style::default().fg(t.info));
 
             let paragraph = Paragraph::new(lines)
                 .block(block)
@@ -142,13 +136,11 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             // Header
             let mut header_spans = vec![Span::styled(
                 base_form,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
             )];
             if !reading.is_empty() {
                 header_spans.push(Span::raw("  "));
-                header_spans.push(Span::styled(reading, Style::default().fg(Color::DarkGray)));
+                header_spans.push(Span::styled(reading, Style::default().fg(t.muted)));
             }
             lines.push(Line::from(header_spans));
             lines.push(Line::from(""));
@@ -158,13 +150,11 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 if !trans.is_empty() {
                     lines.push(Line::from(Span::styled(
                         "Translation:",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
                     )));
                     lines.push(Line::from(Span::styled(
                         format!("  {}", trans),
-                        Style::default().fg(Color::Green),
+                        Style::default().fg(t.success),
                     )));
                     lines.push(Line::from(""));
                 }
@@ -174,19 +164,19 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             if entries.is_empty() && translation.is_none() {
                 lines.push(Line::from(Span::styled(
                     "No dictionary entries found",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )));
             } else {
                 for entry in entries {
                     if !entry.kanji_forms.is_empty() {
                         lines.push(Line::from(Span::styled(
                             format!("Kanji: {}", entry.kanji_forms.join(", ")),
-                            Style::default().fg(Color::Yellow),
+                            Style::default().fg(t.warning),
                         )));
                     }
                     lines.push(Line::from(Span::styled(
                         format!("Readings: {}", entry.readings.join(", ")),
-                        Style::default().fg(Color::Green),
+                        Style::default().fg(t.success),
                     )));
 
                     for (i, sense) in entry.senses.iter().enumerate() {
@@ -212,9 +202,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             if !conjugations.is_empty() {
                 lines.push(Line::from(Span::styled(
                     "Encountered Forms:",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
                 )));
                 for (surface, count) in conjugations {
                     lines.push(Line::from(format!("  {} (x{})", surface, count)));
@@ -227,9 +215,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 if !notes_text.is_empty() {
                     lines.push(Line::from(Span::styled(
                         "Notes:",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
                     )));
                     lines.push(Line::from(notes_text.as_str()));
                     lines.push(Line::from(""));
@@ -240,9 +226,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             if !sentences.is_empty() {
                 lines.push(Line::from(Span::styled(
                     format!("Sentences ({}):", sentences.len()),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
                 )));
                 for (i, sentence) in sentences.iter().enumerate() {
                     lines.push(Line::from(Span::styled(
@@ -254,19 +238,17 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             }
 
             lines.push(Line::from(Span::styled(
-                "Press Esc or Enter to close",
-                Style::default().fg(Color::DarkGray),
+                "Press Esc or Enter to close • ↑↓ to scroll",
+                Style::default().fg(t.muted),
             )));
 
             let block = Block::default()
                 .title(Span::styled(
                     " Card Detail ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Blue));
+                .border_style(Style::default().fg(t.info));
 
             let paragraph = Paragraph::new(lines)
                 .block(block)
@@ -280,16 +262,12 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             let area = centered_rect(65, 85, frame.size());
             frame.render_widget(Clear, padded_rect(area, frame.size()));
 
-            let heading = Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD);
+            let heading = Style::default().fg(t.warning).add_modifier(Modifier::BOLD);
 
             let lines = vec![
                 Line::from(Span::styled(
                     "Keybindings",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 // ── Global ──
@@ -364,19 +342,17 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from(""),
                 Line::from(Span::styled(
                     "↑/↓ to scroll • Esc or ? to close",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
             ];
 
             let block = Block::default()
                 .title(Span::styled(
                     " Help ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Blue));
+                .border_style(Style::default().fg(t.info));
 
             let paragraph = Paragraph::new(lines)
                 .block(block)
@@ -400,14 +376,14 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from(""),
                 Line::from(Span::styled(
                     "Type to edit • Enter to save • Esc to cancel",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
             ];
 
             let block = Block::default()
                 .title(" Note Editor ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow));
+                .border_style(Style::default().fg(t.warning));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -431,7 +407,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             let block = Block::default()
                 .title(" Confirm ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red));
+                .border_style(Style::default().fg(t.error));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -448,10 +424,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(
-                    title.as_str(),
-                    Style::default().fg(Color::Yellow),
-                )),
+                Line::from(Span::styled(title.as_str(), Style::default().fg(t.warning))),
                 Line::from(""),
                 Line::from("This will remove the text and all its tokens."),
                 Line::from(""),
@@ -462,7 +435,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             let block = Block::default()
                 .title(" Confirm Delete ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red));
+                .border_style(Style::default().fg(t.error));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -479,10 +452,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(
-                    title.as_str(),
-                    Style::default().fg(Color::Yellow),
-                )),
+                Line::from(Span::styled(title.as_str(), Style::default().fg(t.warning))),
                 Line::from(""),
                 Line::from("This will delete the source, all chapters,"),
                 Line::from("and all imported chapter texts."),
@@ -494,7 +464,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             let block = Block::default()
                 .title(" Confirm Delete Source ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red));
+                .border_style(Style::default().fg(t.error));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -516,16 +486,13 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from("  f — File (text / .srt / .ass / .epub)"),
                 Line::from("  s — Syosetu novel (ncode)"),
                 Line::from(""),
-                Line::from(Span::styled(
-                    "Esc to cancel",
-                    Style::default().fg(Color::DarkGray),
-                )),
+                Line::from(Span::styled("Esc to cancel", Style::default().fg(t.muted))),
             ];
 
             let block = Block::default()
                 .title(" Import ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green));
+                .border_style(Style::default().fg(t.success));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -544,19 +511,19 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("▎{}_", text),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(t.accent),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Enter to import • Esc to cancel",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
             ];
 
             let block = Block::default()
                 .title(" URL Import ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green));
+                .border_style(Style::default().fg(t.success));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -575,19 +542,19 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("▎{}_", text),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(t.accent),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Enter to import • Esc to cancel",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
             ];
 
             let block = Block::default()
                 .title(" File Import ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green));
+                .border_style(Style::default().fg(t.success));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -606,19 +573,19 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("▎{}_", text),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(t.accent),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Enter to load novel • Esc to cancel",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
             ];
 
             let block = Block::default()
                 .title(" Syosetu Import ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green));
+                .border_style(Style::default().fg(t.success));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -639,12 +606,12 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                     "Expression: ",
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(surface.as_str(), Style::default().fg(Color::Cyan)),
+                Span::styled(surface.as_str(), Style::default().fg(t.accent)),
             ]));
             if !reading.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::styled("Reading:    ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(reading.as_str(), Style::default().fg(Color::Green)),
+                    Span::styled("Reading:    ", Style::default().fg(t.muted)),
+                    Span::styled(reading.as_str(), Style::default().fg(t.success)),
                 ]));
             }
             lines.push(Line::from(""));
@@ -654,23 +621,21 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             )));
             lines.push(Line::from(Span::styled(
                 format!("▎{}_", gloss),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(t.accent),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Type to edit • Enter to save • Esc to cancel",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.muted),
             )));
 
             let block = Block::default()
                 .title(Span::styled(
                     " Expression Translation ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green));
+                .border_style(Style::default().fg(t.success));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -689,12 +654,9 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from(""),
                 Line::from(vec![
                     Span::styled("Word: ", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::styled(base_form.as_str(), Style::default().fg(Color::Cyan)),
+                    Span::styled(base_form.as_str(), Style::default().fg(t.accent)),
                     Span::raw("  "),
-                    Span::styled(
-                        format!("({})", reading),
-                        Style::default().fg(Color::DarkGray),
-                    ),
+                    Span::styled(format!("({})", reading), Style::default().fg(t.muted)),
                 ]),
                 Line::from(""),
                 Line::from(Span::styled(
@@ -703,24 +665,22 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 )),
                 Line::from(Span::styled(
                     format!("▎{}_", text),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(t.success),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Type to edit • Enter to save • Esc to cancel",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
             ];
 
             let block = Block::default()
                 .title(Span::styled(
                     " Word Translation ",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.success).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green));
+                .border_style(Style::default().fg(t.success));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -748,7 +708,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                     "Sentence:",
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
-                Line::from(Span::styled(truncated, Style::default().fg(Color::Cyan))),
+                Line::from(Span::styled(truncated, Style::default().fg(t.accent))),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Translation:",
@@ -756,29 +716,27 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 )),
                 Line::from(Span::styled(
                     format!("▎{}_", translation),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(t.success),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "An SRS card will be created (sentence → translation).",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Type to edit • Enter to save • Esc to cancel",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
             ];
 
             let block = Block::default()
                 .title(Span::styled(
                     " Sentence Translation ",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.success).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green));
+                .border_style(Style::default().fg(t.success));
 
             let paragraph = Paragraph::new(lines)
                 .block(block)
@@ -804,7 +762,7 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             let block = Block::default()
                 .title(" Confirm Delete Card ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red));
+                .border_style(Style::default().fg(t.error));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);
@@ -823,19 +781,19 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("▎{}_", text),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(t.accent),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Enter to search • Esc to cancel/reset",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
             ];
 
             let block = Block::default()
                 .title(" Search ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow));
+                .border_style(Style::default().fg(t.warning));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, area);

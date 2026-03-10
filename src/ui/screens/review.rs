@@ -6,6 +6,7 @@ use ratatui::Frame;
 
 use crate::app::{App, ReviewCardData, ReviewPhase, ReviewState, TokenDisplay};
 use crate::db::models::{AnswerMode, VocabularyStatus};
+use crate::ui::theme::Theme;
 
 /// Render the review screen.
 pub fn render(frame: &mut Frame, app: &App) {
@@ -20,6 +21,8 @@ pub fn render(frame: &mut Frame, app: &App) {
         }
     };
 
+    let t = &app.theme;
+
     // Layout: title bar (1) + main content + status bar (1)
     let outer = Layout::vertical([
         Constraint::Length(1),
@@ -28,21 +31,21 @@ pub fn render(frame: &mut Frame, app: &App) {
     ])
     .split(area);
 
-    render_title_bar(frame, state, outer[0]);
+    render_title_bar(frame, state, outer[0], t);
 
     match state.phase {
-        ReviewPhase::PreSession => render_pre_session(frame, state, outer[1]),
-        ReviewPhase::ShowFront => render_card_front(frame, state, outer[1]),
-        ReviewPhase::ShowBack => render_card_back(frame, state, outer[1]),
-        ReviewPhase::TypingAnswer => render_typing(frame, state, outer[1]),
-        ReviewPhase::ShowResult => render_typed_result(frame, state, outer[1]),
-        ReviewPhase::SessionSummary => render_summary(frame, state, outer[1]),
+        ReviewPhase::PreSession => render_pre_session(frame, state, outer[1], t),
+        ReviewPhase::ShowFront => render_card_front(frame, state, outer[1], t),
+        ReviewPhase::ShowBack => render_card_back(frame, state, outer[1], t),
+        ReviewPhase::TypingAnswer => render_typing(frame, state, outer[1], t),
+        ReviewPhase::ShowResult => render_typed_result(frame, state, outer[1], t),
+        ReviewPhase::SessionSummary => render_summary(frame, state, outer[1], t),
     }
 
-    render_status_bar(frame, state, outer[2]);
+    render_status_bar(frame, state, outer[2], t);
 }
 
-fn render_title_bar(frame: &mut Frame, state: &ReviewState, area: Rect) {
+fn render_title_bar(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Theme) {
     let progress = if state.queue.is_empty() {
         "0/0".to_string()
     } else {
@@ -51,15 +54,10 @@ fn render_title_bar(frame: &mut Frame, state: &ReviewState, area: Rect) {
     let title = Line::from(vec![
         Span::styled(
             " kotoba",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" — Review "),
-        Span::styled(
-            format!("[{}]", progress),
-            Style::default().fg(Color::Yellow),
-        ),
+        Span::styled(format!("[{}]", progress), Style::default().fg(t.warning)),
         Span::raw(format!(
             "  Reviewed: {} | Correct: {}%",
             state.total_reviewed,
@@ -71,12 +69,12 @@ fn render_title_bar(frame: &mut Frame, state: &ReviewState, area: Rect) {
         )),
     ]);
     frame.render_widget(
-        Paragraph::new(title).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(title).style(Style::default().bg(t.title_bar_bg)),
         area,
     );
 }
 
-fn render_status_bar(frame: &mut Frame, state: &ReviewState, area: Rect) {
+fn render_status_bar(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Theme) {
     let hints = match state.phase {
         ReviewPhase::PreSession => " Space/Enter:start  Esc:back  q:quit ",
         ReviewPhase::ShowFront => " Space:reveal  Esc:back  q:quit ",
@@ -85,18 +83,18 @@ fn render_status_bar(frame: &mut Frame, state: &ReviewState, area: Rect) {
         ReviewPhase::ShowResult => " 1:Again 2:Hard 3:Good 4:Easy  Enter:accept auto-rating ",
         ReviewPhase::SessionSummary => " Enter/Esc:back  r:continue ",
     };
-    let status = Line::from(Span::styled(hints, Style::default().fg(Color::DarkGray)));
+    let status = Line::from(Span::styled(hints, Style::default().fg(t.muted)));
     frame.render_widget(
-        Paragraph::new(status).style(Style::default().bg(Color::Rgb(30, 30, 50))),
+        Paragraph::new(status).style(Style::default().bg(t.title_bar_bg)),
         area,
     );
 }
 
-fn render_pre_session(frame: &mut Frame, state: &ReviewState, area: Rect) {
+fn render_pre_session(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Theme) {
     let center = centered_rect(60, 50, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(t.accent))
         .title(" Review Session ");
 
     let inner = block.inner(center);
@@ -106,13 +104,11 @@ fn render_pre_session(frame: &mut Frame, state: &ReviewState, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             format!("  {} cards due", state.total_due),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             format!("  {} new cards", state.total_new),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(t.accent),
         )),
         Line::from(Span::styled(
             format!("  {} cards loaded for this session", state.queue.len()),
@@ -122,16 +118,14 @@ fn render_pre_session(frame: &mut Frame, state: &ReviewState, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "  Press Space or Enter to begin",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.success).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect) {
+fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Theme) {
     let card_data = match state.queue.get(state.current_index) {
         Some(c) => c,
         None => return,
@@ -145,14 +139,13 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Blue))
+        .border_style(Style::default().fg(t.info))
         .title(format!(" {} ", card_data.answer_mode.label()));
     let inner = block.inner(sections[0]);
     frame.render_widget(block, sections[0]);
 
     match card_data.answer_mode {
         AnswerMode::WordReview => {
-            // Show word + context sentence, ask to recall reading and meaning
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
@@ -165,21 +158,20 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect) {
                 Line::from(""),
                 Line::from(Span::styled(
                     "Recall the reading and meaning",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 ))
                 .alignment(Alignment::Center),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Press Space to reveal",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 ))
                 .alignment(Alignment::Center),
             ];
             frame.render_widget(Paragraph::new(lines), inner);
         }
         AnswerMode::SentenceCloze => {
-            // Show sentence with word blanked out
-            let cloze_spans = build_cloze_spans(card_data, true);
+            let cloze_spans = build_cloze_spans(card_data, true, t);
             let lines = vec![
                 Line::from(""),
                 Line::from("  Fill in the blank:").alignment(Alignment::Left),
@@ -188,19 +180,18 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect) {
                 Line::from(""),
                 Line::from(Span::styled(
                     "Press Space to reveal",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 ))
                 .alignment(Alignment::Center),
             ];
             frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         }
         AnswerMode::SentenceFull => {
-            // Show the full sentence, ask for translation
             let lines = vec![
                 Line::from(""),
                 Line::from(Span::styled(
                     "  Translate this sentence:",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
@@ -212,7 +203,7 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect) {
                 Line::from(""),
                 Line::from(Span::styled(
                     "Press Space to reveal translation",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 ))
                 .alignment(Alignment::Center),
             ];
@@ -222,10 +213,10 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect) {
 
     // Sentence context below — blank the target word for cloze cards
     let blank = card_data.answer_mode == AnswerMode::SentenceCloze;
-    render_sentence_context(frame, state, sections[1], blank);
+    render_sentence_context(frame, state, sections[1], blank, t);
 }
 
-fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
+fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Theme) {
     let card_data = match state.queue.get(state.current_index) {
         Some(c) => c,
         None => return,
@@ -238,15 +229,13 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Green))
+        .border_style(Style::default().fg(t.success))
         .title(format!(" {} — Answer ", card_data.answer_mode.label()));
     let inner = block.inner(sections[0]);
     frame.render_widget(block, sections[0]);
 
     match card_data.answer_mode {
         AnswerMode::WordReview | AnswerMode::SentenceCloze => {
-            // For both word review and sentence cloze, show full answer:
-            // word + reading + user translation + definitions
             let mut lines = vec![
                 Line::from(""),
                 Line::from(vec![
@@ -259,36 +248,31 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
                     Span::raw(" "),
                     Span::styled(
                         format!("({})", card_data.display_reading),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(t.accent),
                     ),
                 ]),
                 Line::from(""),
             ];
 
-            // For cloze, also show the sentence with word revealed
             if card_data.answer_mode == AnswerMode::SentenceCloze {
-                let cloze_spans = build_cloze_spans(card_data, false);
+                let cloze_spans = build_cloze_spans(card_data, false, t);
                 lines.push(Line::from(cloze_spans));
                 lines.push(Line::from(""));
             }
 
-            // Show user translation if available
             if let Some(ref translation) = card_data.vocabulary.translation {
                 if !translation.is_empty() {
                     lines.push(Line::from(vec![
-                        Span::styled("  ★ ", Style::default().fg(Color::Yellow)),
+                        Span::styled("  ★ ", Style::default().fg(t.warning)),
                         Span::styled(
                             translation.as_str(),
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(Modifier::BOLD),
+                            Style::default().fg(t.success).add_modifier(Modifier::BOLD),
                         ),
                     ]));
                     lines.push(Line::from(""));
                 }
             }
 
-            // Show definitions
             for entry in &card_data.definitions {
                 for (i, sense) in entry.senses.iter().enumerate() {
                     let glosses = sense.glosses.join("; ");
@@ -298,11 +282,8 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
                         format!("[{}] ", sense.pos.join(", "))
                     };
                     lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("  {}. ", i + 1),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                        Span::styled(pos, Style::default().fg(Color::Yellow)),
+                        Span::styled(format!("  {}. ", i + 1), Style::default().fg(t.muted)),
+                        Span::styled(pos, Style::default().fg(t.warning)),
                         Span::raw(glosses),
                     ]));
                 }
@@ -311,16 +292,15 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
             if card_data.definitions.is_empty() {
                 lines.push(Line::from(Span::styled(
                     "  (No dictionary entry found)",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.muted),
                 )));
             }
 
             lines.push(Line::from(""));
-            lines.push(rating_hint_line());
+            lines.push(rating_hint_line(t));
             frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         }
         AnswerMode::SentenceFull => {
-            // Show sentence + translation
             let translation = card_data
                 .sentence_translation_text
                 .as_deref()
@@ -335,26 +315,24 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect) {
                 )),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("  Translation: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("  Translation: ", Style::default().fg(t.muted)),
                     Span::styled(
                         translation,
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(t.success).add_modifier(Modifier::BOLD),
                     ),
                 ]),
                 Line::from(""),
             ];
-            lines.push(rating_hint_line());
+            lines.push(rating_hint_line(t));
             frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         }
     }
 
     // Sentence context (answer revealed — don't blank)
-    render_sentence_context(frame, state, sections[1], false);
+    render_sentence_context(frame, state, sections[1], false, t);
 }
 
-fn render_typing(frame: &mut Frame, state: &ReviewState, area: Rect) {
+fn render_typing(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Theme) {
     let card_data = match state.queue.get(state.current_index) {
         Some(c) => c,
         None => return,
@@ -366,7 +344,7 @@ fn render_typing(frame: &mut Frame, state: &ReviewState, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(Style::default().fg(t.warning))
         .title(" Typed Reading ");
     let inner = block.inner(sections[0]);
     frame.render_widget(block, sections[0]);
@@ -383,7 +361,7 @@ fn render_typing(frame: &mut Frame, state: &ReviewState, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "Type the reading (hiragana, romaji, or kanji):",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.muted),
         ))
         .alignment(Alignment::Center),
         Line::from(""),
@@ -392,7 +370,7 @@ fn render_typing(frame: &mut Frame, state: &ReviewState, area: Rect) {
             Span::styled(
                 &state.typed_input,
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(t.accent)
                     .add_modifier(Modifier::UNDERLINED),
             ),
             Span::styled("_", Style::default().fg(Color::White)),
@@ -400,16 +378,16 @@ fn render_typing(frame: &mut Frame, state: &ReviewState, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "Press Enter to submit",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.muted),
         ))
         .alignment(Alignment::Center),
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 
-    render_sentence_context(frame, state, sections[1], false);
+    render_sentence_context(frame, state, sections[1], false, t);
 }
 
-fn render_typed_result(frame: &mut Frame, state: &ReviewState, area: Rect) {
+fn render_typed_result(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Theme) {
     let card_data = match state.queue.get(state.current_index) {
         Some(c) => c,
         None => return,
@@ -422,7 +400,7 @@ fn render_typed_result(frame: &mut Frame, state: &ReviewState, area: Rect) {
     let (ref input, ref expected, is_correct) =
         state.typed_result.as_ref().cloned().unwrap_or_default();
 
-    let result_color = if is_correct { Color::Green } else { Color::Red };
+    let result_color = if is_correct { t.success } else { t.error };
     let result_text = if is_correct { "Correct!" } else { "Incorrect" };
 
     let block = Block::default()
@@ -453,40 +431,38 @@ fn render_typed_result(frame: &mut Frame, state: &ReviewState, area: Rect) {
         .alignment(Alignment::Center),
         Line::from(""),
         Line::from(vec![
-            Span::styled("  Your answer: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Your answer: ", Style::default().fg(t.muted)),
             Span::styled(input, Style::default().fg(result_color)),
         ]),
         Line::from(vec![
-            Span::styled("  Expected:    ", Style::default().fg(Color::DarkGray)),
-            Span::styled(expected, Style::default().fg(Color::Green)),
+            Span::styled("  Expected:    ", Style::default().fg(t.muted)),
+            Span::styled(expected, Style::default().fg(t.success)),
         ]),
         Line::from(""),
     ];
 
-    // Show diff
     if !is_correct {
-        let diff_spans = build_diff_spans(input, expected);
+        let diff_spans = build_diff_spans(input, expected, t);
         lines.push(Line::from(vec![Span::styled(
             "  Diff: ",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.muted),
         )]));
         lines.push(Line::from(diff_spans));
     }
 
-    // Show meaning/definitions for word cards (helpful when require_typed_input is on)
     if card_data.card.card_type == "word" {
         if let Some(ref translation) = card_data.vocabulary.translation {
             if !translation.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::styled("  ★ ", Style::default().fg(Color::Yellow)),
-                    Span::styled(translation.as_str(), Style::default().fg(Color::Green)),
+                    Span::styled("  ★ ", Style::default().fg(t.warning)),
+                    Span::styled(translation.as_str(), Style::default().fg(t.success)),
                 ]));
             }
         }
         if let Some(entry) = card_data.definitions.first() {
             lines.push(Line::from(Span::styled(
                 format!("  {}", entry.short_gloss()),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(t.accent),
             )));
         }
     }
@@ -494,19 +470,19 @@ fn render_typed_result(frame: &mut Frame, state: &ReviewState, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         format!("  {}", auto_rating_text),
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(t.warning),
     )));
 
     frame.render_widget(Paragraph::new(lines), inner);
 
-    render_sentence_context(frame, state, sections[1], false);
+    render_sentence_context(frame, state, sections[1], false, t);
 }
 
-fn render_summary(frame: &mut Frame, state: &ReviewState, area: Rect) {
+fn render_summary(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Theme) {
     let center = centered_rect(60, 50, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Green))
+        .border_style(Style::default().fg(t.success))
         .title(" Session Complete ");
     let inner = block.inner(center);
     frame.render_widget(block, center);
@@ -521,9 +497,7 @@ fn render_summary(frame: &mut Frame, state: &ReviewState, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "  Review Session Complete!",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.success).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(format!("  Total reviewed: {}", state.total_reviewed)),
@@ -535,7 +509,7 @@ fn render_summary(frame: &mut Frame, state: &ReviewState, area: Rect) {
         if state.queue.is_empty() && state.total_reviewed == 0 {
             Line::from(Span::styled(
                 "  No cards due for review right now.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.muted),
             ))
         } else {
             Line::from("")
@@ -543,15 +517,20 @@ fn render_summary(frame: &mut Frame, state: &ReviewState, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "  Press Enter or Esc to return",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.muted),
         )),
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// Render the sentence context below the card.
-/// If `blank_target` is true, the card's target word is replaced with ____ in the sentence.
-fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, blank_target: bool) {
+fn render_sentence_context(
+    frame: &mut Frame,
+    state: &ReviewState,
+    area: Rect,
+    blank_target: bool,
+    t: &Theme,
+) {
     let card_data = match state.queue.get(state.current_index) {
         Some(c) => c,
         None => return,
@@ -563,7 +542,7 @@ fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, b
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(t.muted))
         .title(" Sentence Context ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -588,13 +567,10 @@ fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, b
         let is_selected = state.context_word_index == Some(i);
 
         if blank_target && is_target {
-            // Emit a single ____ for the whole group
             if !blank_emitted {
                 spans.push(Span::styled(
                     "____",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
                 ));
                 blank_emitted = true;
             }
@@ -602,18 +578,17 @@ fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, b
             spans.push(Span::styled(
                 &token.surface,
                 Style::default()
-                    .bg(Color::Blue)
+                    .bg(t.info)
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ));
         } else {
-            spans.push(Span::styled(&token.surface, token_style(token)));
+            spans.push(Span::styled(&token.surface, review_token_style(token, t)));
         }
     }
     lines.push(Line::from(spans));
 
-    // Word info for learning words (excluding the card's target word)
-    // Show reading + short gloss for non-trivial, non-target learning words
+    // Word info for learning words
     lines.push(Line::from(""));
     let mut seen = std::collections::HashSet::new();
 
@@ -621,11 +596,9 @@ fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, b
         if token.is_trivial {
             continue;
         }
-        // Skip non-head group members
         if token.group_id.is_some() && !token.is_group_head {
             continue;
         }
-        // Skip the card's target word (including entire group)
         let is_target = if let Some(gid) = target_gid {
             token.group_id == Some(gid)
         } else {
@@ -634,19 +607,16 @@ fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, b
         if is_target {
             continue;
         }
-        // Skip Known words (they don't need hints)
         if token.vocabulary_status == VocabularyStatus::Known {
             continue;
         }
-        // Deduplicate by base_form+reading
         let key = (token.base_form.clone(), token.reading.clone());
-        if !seen.insert(key) {
+        if !seen.insert(key.clone()) {
             continue;
         }
 
         let is_selected = state.context_word_index == Some(i);
 
-        // Build display surface for group heads
         let display_surface = if let Some(gid) = token.group_id {
             card_data
                 .sentence_tokens
@@ -658,7 +628,6 @@ fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, b
             token.surface.clone()
         };
 
-        // Aggregate reading from all group members (same as sidebar logic)
         let display_reading: String = if let Some(gid) = token.group_id {
             card_data
                 .sentence_tokens
@@ -685,8 +654,6 @@ fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, b
             String::new()
         };
 
-        // Show user translation > MWE gloss > JMdict gloss (same priority as sidebar)
-        let key = (token.base_form.clone(), token.reading.clone());
         let user_translation = state
             .vocabulary_cache
             .get(&key)
@@ -703,11 +670,9 @@ fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, b
 
         let marker = if is_selected { "▸ " } else { "  " };
         let style = if is_selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(t.muted)
         };
 
         lines.push(Line::from(Span::styled(
@@ -724,9 +689,7 @@ fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, b
 }
 
 /// Build spans for sentence cloze display.
-/// If `blank` is true, the target word/group is replaced with ____. Otherwise it's highlighted.
-/// Uses `target_group_id` to blank the entire compound group, not just the head token.
-fn build_cloze_spans<'a>(card_data: &'a ReviewCardData, blank: bool) -> Vec<Span<'a>> {
+fn build_cloze_spans<'a>(card_data: &'a ReviewCardData, blank: bool, t: &Theme) -> Vec<Span<'a>> {
     let mut spans = Vec::new();
     spans.push(Span::raw("  "));
 
@@ -734,7 +697,6 @@ fn build_cloze_spans<'a>(card_data: &'a ReviewCardData, blank: bool) -> Vec<Span
     let target_reading = &card_data.vocabulary.reading;
     let target_gid = card_data.target_group_id;
 
-    // Track whether we've already emitted the blank for a group
     let mut blank_emitted = false;
 
     for token in &card_data.sentence_tokens {
@@ -746,35 +708,34 @@ fn build_cloze_spans<'a>(card_data: &'a ReviewCardData, blank: bool) -> Vec<Span
 
         if is_target {
             if blank {
-                // Emit a single ____ for the whole group
                 if !blank_emitted {
                     spans.push(Span::styled(
                         "____",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(t.warning).add_modifier(Modifier::BOLD),
                     ));
                     blank_emitted = true;
                 }
-                // Skip additional group members (they're part of the blank)
             } else {
                 spans.push(Span::styled(
                     token.surface.as_str(),
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(t.cloze_reveal_fg)
                         .add_modifier(Modifier::BOLD)
-                        .bg(Color::Rgb(30, 60, 30)),
+                        .bg(t.cloze_reveal_bg),
                 ));
             }
         } else {
-            spans.push(Span::styled(token.surface.as_str(), token_style(token)));
+            spans.push(Span::styled(
+                token.surface.as_str(),
+                review_token_style(token, t),
+            ));
         }
     }
     spans
 }
 
 /// Build diff spans comparing input to expected reading.
-fn build_diff_spans<'a>(input: &'a str, expected: &'a str) -> Vec<Span<'a>> {
+fn build_diff_spans<'a>(input: &'a str, expected: &'a str, t: &Theme) -> Vec<Span<'a>> {
     let mut spans = Vec::new();
     spans.push(Span::raw("          "));
 
@@ -787,22 +748,16 @@ fn build_diff_spans<'a>(input: &'a str, expected: &'a str) -> Vec<Span<'a>> {
         let ec = expected_chars.get(i);
         match (ic, ec) {
             (Some(a), Some(b)) if a == b => {
-                spans.push(Span::styled(
-                    a.to_string(),
-                    Style::default().fg(Color::Green),
-                ));
+                spans.push(Span::styled(a.to_string(), Style::default().fg(t.success)));
             }
             (Some(a), Some(_b)) => {
-                spans.push(Span::styled(a.to_string(), Style::default().fg(Color::Red)));
+                spans.push(Span::styled(a.to_string(), Style::default().fg(t.error)));
             }
             (Some(a), None) => {
-                spans.push(Span::styled(a.to_string(), Style::default().fg(Color::Red)));
+                spans.push(Span::styled(a.to_string(), Style::default().fg(t.error)));
             }
             (None, Some(b)) => {
-                spans.push(Span::styled(
-                    b.to_string(),
-                    Style::default().fg(Color::DarkGray),
-                ));
+                spans.push(Span::styled(b.to_string(), Style::default().fg(t.muted)));
             }
             (None, None) => {}
         }
@@ -810,39 +765,39 @@ fn build_diff_spans<'a>(input: &'a str, expected: &'a str) -> Vec<Span<'a>> {
     spans
 }
 
-fn rating_hint_line<'a>() -> Line<'a> {
+fn rating_hint_line<'a>(t: &Theme) -> Line<'a> {
     Line::from(vec![
-        Span::styled("  Rate: ", Style::default().fg(Color::DarkGray)),
-        Span::styled("1", Style::default().fg(Color::Red)),
+        Span::styled("  Rate: ", Style::default().fg(t.muted)),
+        Span::styled("1", Style::default().fg(t.error)),
         Span::raw("=Again "),
-        Span::styled("2", Style::default().fg(Color::Yellow)),
+        Span::styled("2", Style::default().fg(t.warning)),
         Span::raw("=Hard "),
-        Span::styled("3", Style::default().fg(Color::Green)),
+        Span::styled("3", Style::default().fg(t.success)),
         Span::raw("=Good "),
-        Span::styled("4", Style::default().fg(Color::Cyan)),
+        Span::styled("4", Style::default().fg(t.accent)),
         Span::raw("=Easy"),
     ])
 }
 
-/// Style for a token — trivial tokens (punctuation, whitespace) get no highlighting.
-fn token_style(token: &TokenDisplay) -> Style {
+/// Style for a token in review context — uses the subtler review-specific colors.
+fn review_token_style(token: &TokenDisplay, t: &Theme) -> Style {
     if token.is_trivial {
         Style::default()
     } else {
-        status_style(token.vocabulary_status)
+        review_status_style(token.vocabulary_status, t)
     }
 }
 
-/// Color style for a vocabulary status.
-fn status_style(status: VocabularyStatus) -> Style {
+/// Color style for a vocabulary status in review context.
+fn review_status_style(status: VocabularyStatus, t: &Theme) -> Style {
     match status {
-        VocabularyStatus::New => Style::default().bg(Color::Rgb(60, 80, 160)),
-        VocabularyStatus::Learning1 => Style::default().bg(Color::Rgb(120, 100, 40)),
-        VocabularyStatus::Learning2 => Style::default().bg(Color::Rgb(100, 85, 30)),
-        VocabularyStatus::Learning3 => Style::default().bg(Color::Rgb(80, 70, 20)),
-        VocabularyStatus::Learning4 => Style::default().bg(Color::Rgb(60, 55, 15)),
+        VocabularyStatus::New => Style::default().bg(t.review_vocab_new_bg),
+        VocabularyStatus::Learning1 => Style::default().bg(t.review_vocab_l1_bg),
+        VocabularyStatus::Learning2 => Style::default().bg(t.review_vocab_l2_bg),
+        VocabularyStatus::Learning3 => Style::default().bg(t.review_vocab_l3_bg),
+        VocabularyStatus::Learning4 => Style::default().bg(t.review_vocab_l4_bg),
         VocabularyStatus::Known => Style::default(),
-        VocabularyStatus::Ignored => Style::default().fg(Color::DarkGray),
+        VocabularyStatus::Ignored => Style::default().fg(t.muted),
     }
 }
 
