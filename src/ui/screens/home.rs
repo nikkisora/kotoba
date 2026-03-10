@@ -670,7 +670,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Status bar
     let status = Line::from(vec![Span::styled(
-        " ↑↓:navigate  Tab:switch panel  Enter:open  r:review  c:cards  s:settings  f:finished  l:library  i:import  q:quit ",
+        " ↑↓:navigate  Tab:panel  Enter:open  r:review  c:cards  s:settings  S:stats  f:finished  l:library  i:import  q:quit ",
         Style::default().fg(t.muted),
     )]);
     frame.render_widget(

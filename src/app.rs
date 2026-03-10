@@ -33,6 +33,7 @@ pub enum Screen {
     Review,
     CardBrowser,
     Settings,
+    Stats,
 }
 
 /// What kind of popup is being shown.
@@ -648,6 +649,67 @@ pub struct SettingsState {
     pub dirty: bool,
 }
 
+/// Time range for stats display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatsTimeRange {
+    Week,
+    Month,
+    Quarter,
+    All,
+}
+
+impl StatsTimeRange {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Week => "7d",
+            Self::Month => "30d",
+            Self::Quarter => "90d",
+            Self::All => "All",
+        }
+    }
+
+    pub fn days(&self) -> usize {
+        match self {
+            Self::Week => 7,
+            Self::Month => 30,
+            Self::Quarter => 90,
+            Self::All => 3650, // ~10 years
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Week => Self::Month,
+            Self::Month => Self::Quarter,
+            Self::Quarter => Self::All,
+            Self::All => Self::Week,
+        }
+    }
+}
+
+/// Which panel is focused on the stats screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatsFocus {
+    Overview,
+    Coverage,
+}
+
+/// Stats screen state.
+#[allow(dead_code)]
+pub struct StatsState {
+    pub overview: crate::db::stats::OverviewStats,
+    pub srs: crate::db::stats::SrsStats,
+    pub words_by_status: std::collections::HashMap<models::VocabularyStatus, usize>,
+    pub known_over_time: Vec<(String, usize)>,
+    pub activity: Vec<models::DailyActivity>,
+    pub coverages: Vec<crate::db::stats::CoverageStats>,
+    pub streak: usize,
+    pub time_range: StatsTimeRange,
+    pub focus: StatsFocus,
+    pub coverage_selected: usize,
+    pub scroll: usize,
+}
+
 /// Central application state.
 pub struct App {
     pub screen: Screen,
@@ -661,6 +723,7 @@ pub struct App {
     pub review_state: Option<ReviewState>,
     pub card_browser_state: Option<CardBrowserState>,
     pub settings_state: Option<SettingsState>,
+    pub stats_state: Option<StatsState>,
     pub srs_engine: Option<SrsEngine>,
     pub background_importer: Option<crate::import::background::BackgroundImporter>,
     /// Set of chapter_ids currently being preprocessed (for UI spinners).
@@ -703,6 +766,7 @@ impl App {
             review_state: None,
             card_browser_state: None,
             settings_state: None,
+            stats_state: None,
             srs_engine: SrsEngine::new().ok(),
             background_importer: None,
             preprocessing_chapters: std::collections::HashSet::new(),
@@ -4085,6 +4149,54 @@ impl App {
         // Save config to TOML file
         crate::config::save_config(&self.config)?;
         self.set_message("Settings saved");
+        Ok(())
+    }
+
+    /// Load the stats screen with all required data.
+    pub fn load_stats(&mut self) -> Result<()> {
+        let time_range = self
+            .stats_state
+            .as_ref()
+            .map(|s| s.time_range)
+            .unwrap_or(StatsTimeRange::Month);
+        self.load_stats_with_range(time_range)
+    }
+
+    /// Load stats for a specific time range.
+    pub fn load_stats_with_range(&mut self, time_range: StatsTimeRange) -> Result<()> {
+        use crate::db::stats;
+        let conn = self.open_db()?;
+
+        let overview = stats::get_overview_stats(&conn)?;
+        let srs = stats::get_srs_stats(&conn)?;
+        let words_by_status = stats::get_words_by_status(&conn)?;
+        let known_over_time = stats::get_known_words_over_time(&conn, time_range.days())?;
+        let activity = stats::get_reading_activity(&conn, time_range.days())?;
+        let coverages = stats::get_all_text_coverages(&conn)?;
+        let streak = models::get_activity_streak(&conn)?;
+
+        let prev = self.stats_state.as_ref();
+        let focus = prev.map(|s| s.focus).unwrap_or(StatsFocus::Overview);
+        let coverage_selected = prev
+            .map(|s| s.coverage_selected.min(coverages.len().saturating_sub(1)))
+            .unwrap_or(0);
+        let scroll = prev.map(|s| s.scroll).unwrap_or(0);
+
+        self.stats_state = Some(StatsState {
+            overview,
+            srs,
+            words_by_status,
+            known_over_time,
+            activity,
+            coverages,
+            streak,
+            time_range,
+            focus,
+            coverage_selected,
+            scroll,
+        });
+        self.previous_screen = Some(self.screen.clone());
+        self.screen = Screen::Stats;
         Ok(())
     }
 }

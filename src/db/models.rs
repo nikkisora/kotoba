@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 // ─── Enums ───────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(i32)]
 pub enum VocabularyStatus {
     Ignored = -1,

@@ -460,11 +460,13 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             if app.screen == Screen::Settings
                 || app.screen == Screen::CardBrowser
                 || app.screen == Screen::Home
+                || app.screen == Screen::Stats
             {
                 match &app.screen.clone() {
                     Screen::Settings => handle_settings_key(app, key),
                     Screen::CardBrowser => handle_card_browser_key(app, key),
                     Screen::Home => handle_home_key(app, key),
+                    Screen::Stats => handle_stats_key(app, key),
                     _ => {}
                 }
                 return;
@@ -529,6 +531,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
         Screen::Review => handle_review_key(app, key),
         Screen::CardBrowser => handle_card_browser_key(app, key),
         Screen::Settings => handle_settings_key(app, key),
+        Screen::Stats => handle_stats_key(app, key),
     }
 }
 
@@ -1596,6 +1599,89 @@ fn handle_home_common_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('s') => {
             app.load_settings();
+        }
+        KeyCode::Char('S') => {
+            if let Err(e) = app.load_stats() {
+                app.set_message(format!("Stats error: {}", e));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_stats_key(app: &mut App, key: KeyEvent) {
+    use app::StatsFocus;
+
+    match key.code {
+        KeyCode::Tab | KeyCode::BackTab => {
+            if let Some(ref mut state) = app.stats_state {
+                state.focus = match state.focus {
+                    StatsFocus::Overview => StatsFocus::Coverage,
+                    StatsFocus::Coverage => StatsFocus::Overview,
+                };
+            }
+        }
+        KeyCode::Char('t') => {
+            // Toggle time range and reload data
+            let next = app
+                .stats_state
+                .as_ref()
+                .map(|s| s.time_range.next())
+                .unwrap_or(app::StatsTimeRange::Month);
+            if let Err(e) = app.load_stats_with_range(next) {
+                app.set_message(format!("Stats error: {}", e));
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut state) = app.stats_state {
+                match state.focus {
+                    StatsFocus::Coverage => {
+                        state.coverage_selected = state.coverage_selected.saturating_sub(1);
+                    }
+                    StatsFocus::Overview => {
+                        state.scroll = state.scroll.saturating_sub(1);
+                    }
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut state) = app.stats_state {
+                match state.focus {
+                    StatsFocus::Coverage => {
+                        let max = state.coverages.len().saturating_sub(1);
+                        state.coverage_selected = (state.coverage_selected + 1).min(max);
+                    }
+                    StatsFocus::Overview => {
+                        state.scroll += 1;
+                    }
+                }
+            }
+        }
+        KeyCode::Enter => {
+            // Open selected text in Reader (from coverage list)
+            let text_id = app.stats_state.as_ref().and_then(|s| {
+                if s.focus == StatsFocus::Coverage {
+                    s.coverages.get(s.coverage_selected).map(|c| c.text_id)
+                } else {
+                    None
+                }
+            });
+            if let Some(id) = text_id {
+                app.previous_screen = Some(Screen::Stats);
+                if let Err(e) = app.load_text(id) {
+                    app.set_message(format!("Error loading text: {}", e));
+                }
+            }
+        }
+        KeyCode::Esc => {
+            let target = app.previous_screen.take().unwrap_or(Screen::Home);
+            app.screen = target.clone();
+            match &target {
+                Screen::Home => {
+                    let _ = app.refresh_home();
+                }
+                _ => {}
+            }
         }
         _ => {}
     }

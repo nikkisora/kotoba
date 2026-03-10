@@ -26,6 +26,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Screen::Review => screens::review::render(frame, app),
         Screen::CardBrowser => screens::card_browser::render(frame, app),
         Screen::Settings => screens::settings::render(frame, app),
+        Screen::Stats => screens::stats::render(frame, app),
     }
 
     // Render popup overlay if any

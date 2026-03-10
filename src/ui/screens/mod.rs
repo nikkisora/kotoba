@@ -6,3 +6,4 @@ pub mod placeholder;
 pub mod reader;
 pub mod review;
 pub mod settings;
+pub mod stats;

@@ -290,6 +290,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
                 Line::from("  l            Go to Library"),
                 Line::from("  r            Go to Review"),
                 Line::from("  i            Import menu"),
+                Line::from("  S            Go to Stats"),
                 Line::from("  f            Toggle show finished texts"),
                 Line::from(""),
                 // ── Library ──
@@ -351,6 +352,14 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
                 Line::from("  Left/Right   Navigate sentence context"),
                 Line::from("  Ctrl+L       LLM analysis of card sentence"),
                 Line::from("  Esc          Exit review"),
+                Line::from(""),
+                // ── Stats ──
+                Line::from(Span::styled("Stats:", heading)),
+                Line::from("  Tab          Switch focus (stats / coverage list)"),
+                Line::from("  t            Toggle time range (7d / 30d / 90d / All)"),
+                Line::from("  Up/k Down/j  Scroll / navigate coverage list"),
+                Line::from("  Enter        Open selected text in Reader"),
+                Line::from("  Esc          Back"),
                 Line::from(""),
                 // ── Import Menu ──
                 Line::from(Span::styled("Import Menu:", heading)),

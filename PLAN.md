@@ -80,30 +80,35 @@ Everything below is **not yet implemented**. For a description of what the app c
 
 ---
 
-## Phase 6 — Stats Screen
+## Phase 6 — Stats Screen ✅
 
 **Goal**: Visualize learning progress with terminal-based charts and metrics.
 
 ### 6.1 Stats Data Queries
-- [ ] Implement `db/stats.rs`:
-  - `known_words_over_time(conn, days: usize) -> Vec<(Date, usize)>`
-  - `words_by_status(conn) -> HashMap<VocabularyStatus, usize>`
-  - `reading_activity(conn, days: usize) -> Vec<(Date, usize)>`
-  - `srs_stats(conn) -> SrsStats` — due_today, due_tomorrow, total_reviews, avg_accuracy, retention_rate
-  - `text_coverage(conn, text_id: i64) -> CoverageStats` — total tokens, known tokens, learning tokens, new tokens, % coverage
+- [x] Implement `db/stats.rs`:
+  - `get_known_words_over_time(conn, days)` — cumulative Known word count over time with baseline
+  - `get_words_by_status(conn)` — `HashMap<VocabularyStatus, usize>` breakdown of all status levels
+  - `get_reading_activity(conn, days)` — daily reading activity (delegates to `daily_activity` table)
+  - `get_srs_stats(conn) -> SrsStats` — due today/tomorrow, total reviews, reviews today, 7d/30d accuracy, retention rate, card counts by state
+  - `get_text_coverage(conn, text_id) -> CoverageStats` — total/known/learning/new/ignored tokens + coverage %
+  - `get_all_text_coverages(conn)` — coverage for all read texts
+  - `get_overview_stats(conn) -> OverviewStats` — texts read, total/known/learning/new/ignored word counts
 
 ### 6.2 Stats Screen UI
-- [ ] Implement `ui/screens/stats.rs`:
-  - **Overview panel**: Total vocabulary (known/learning/new), texts imported, total reviews
-  - **Vocabulary growth chart**: ASCII/braille line chart showing known words over time (last 30/90/365 days)
-  - **Status breakdown**: Horizontal stacked bar (New | L1 | L2 | L3 | L4 | Known | Ignored)
-  - **Reading streak**: Calendar heatmap or simple "X days in a row" counter
-  - **SRS panel**: Cards due today/tomorrow, review accuracy rate (last 7 days), retention rate
-  - **Per-text coverage**: selectable list showing coverage % for each imported text
-- [ ] Keybindings:
-  - `↑`/`↓` — scroll between stat panels
-  - `t` — toggle time range (7d / 30d / 90d / all)
+- [x] Implement `ui/screens/stats.rs`:
+  - **Overview panel**: texts read, total vocabulary, known/learning/new/ignored counts, activity streak
+  - **Vocabulary growth chart**: ASCII block-character line chart showing cumulative Known words over time
+  - **Status breakdown**: horizontal stacked color bar (Known | L1 | L2 | L3 | L4 | New | Ignored) with legend percentages
+  - **SRS panel**: due now/tomorrow, reviews today/total, 7d/30d accuracy, retention rate, card counts by state
+  - **Per-text coverage**: selectable list with coverage bar + percentage, detail panel for selected text
+- [x] Two-panel focus: Tab switches between stats panels (left) and coverage list (right), active panel highlighted
+- [x] Keybindings:
+  - `Tab`/`BackTab` — switch focus between stats and coverage panels
+  - `↑`/`↓` — scroll stats or navigate coverage list
+  - `t` — toggle time range (7d / 30d / 90d / All) — reloads data for new range
   - `Enter` on a text in coverage list — jump to Reader for that text
+  - `Esc` — back to previous screen
+- [x] Accessible from Home screen via `S` key
 
 ---
 

@@ -137,6 +137,9 @@ All modes show sentence context with vocabulary coloring. Context words are navi
 ### Card Browser
 Browse all SRS cards with filtering (All, Due Now, Word Cards, Sentence Cards, New, Learning, Review, Retired) and sorting (Due Date, Created Date, Word). Column-aligned display with unicode-width-aware padding. Per-card actions: `r` reset to New, `d` delete.
 
+### Stats
+Learning analytics dashboard with four panels on the left (overview, vocabulary growth chart, status breakdown bar, SRS review stats) and a per-text coverage list on the right. Overview shows total vocabulary counts by status and activity streak. Vocabulary growth chart renders a block-character line graph of cumulative Known words over a configurable time range (7d/30d/90d/All, toggled with `t`). Status breakdown is a color-coded horizontal stacked bar with legend. SRS panel shows due cards, review counts, accuracy rates (7d/30d), retention rate, and card state distribution. Coverage list shows each text with a visual coverage bar and percentage; selecting a text shows token breakdown detail; Enter opens it in the Reader. Tab switches focus between left panels and coverage list. Accessible from Home via `S`.
+
 ### Settings
 Two-panel settings editor with categories (Reader, SRS). Supports Bool toggles (Enter/Space), Integer inputs (Enter to edit), and Choice cycling (Enter/Space to cycle through options like answer mode and review order). Left/Right/Tab switches categories. Auto-saves on exit.
 
