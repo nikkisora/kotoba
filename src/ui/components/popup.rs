@@ -124,6 +124,158 @@ pub fn render_popup(frame: &mut Frame, _app: &App, popup: &PopupState) {
             frame.render_widget(paragraph, area);
         }
 
+        PopupState::CardDetail {
+            base_form,
+            reading,
+            entries,
+            conjugations,
+            notes,
+            translation,
+            sentences,
+            scroll,
+        } => {
+            let area = centered_rect(65, 85, frame.size());
+            frame.render_widget(Clear, padded_rect(area, frame.size()));
+
+            let mut lines: Vec<Line> = Vec::new();
+
+            // Header
+            let mut header_spans = vec![Span::styled(
+                base_form,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )];
+            if !reading.is_empty() {
+                header_spans.push(Span::raw("  "));
+                header_spans.push(Span::styled(reading, Style::default().fg(Color::DarkGray)));
+            }
+            lines.push(Line::from(header_spans));
+            lines.push(Line::from(""));
+
+            // User translation
+            if let Some(trans) = translation {
+                if !trans.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "Translation:",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", trans),
+                        Style::default().fg(Color::Green),
+                    )));
+                    lines.push(Line::from(""));
+                }
+            }
+
+            // Dictionary entries
+            if entries.is_empty() && translation.is_none() {
+                lines.push(Line::from(Span::styled(
+                    "No dictionary entries found",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for entry in entries {
+                    if !entry.kanji_forms.is_empty() {
+                        lines.push(Line::from(Span::styled(
+                            format!("Kanji: {}", entry.kanji_forms.join(", ")),
+                            Style::default().fg(Color::Yellow),
+                        )));
+                    }
+                    lines.push(Line::from(Span::styled(
+                        format!("Readings: {}", entry.readings.join(", ")),
+                        Style::default().fg(Color::Green),
+                    )));
+
+                    for (i, sense) in entry.senses.iter().enumerate() {
+                        let pos_tags: Vec<&str> = sense
+                            .pos
+                            .iter()
+                            .map(|s| s.as_str())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        let pos = if pos_tags.is_empty() {
+                            String::new()
+                        } else {
+                            format!("[{}] ", pos_tags.join(", "))
+                        };
+                        let glosses = sense.glosses.join("; ");
+                        lines.push(Line::from(format!("  {}. {}{}", i + 1, pos, glosses)));
+                    }
+                    lines.push(Line::from(""));
+                }
+            }
+
+            // Conjugation encounters
+            if !conjugations.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "Encountered Forms:",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for (surface, count) in conjugations {
+                    lines.push(Line::from(format!("  {} (x{})", surface, count)));
+                }
+                lines.push(Line::from(""));
+            }
+
+            // Notes
+            if let Some(notes_text) = notes {
+                if !notes_text.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "Notes:",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                    lines.push(Line::from(notes_text.as_str()));
+                    lines.push(Line::from(""));
+                }
+            }
+
+            // Sentences
+            if !sentences.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!("Sentences ({}):", sentences.len()),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for (i, sentence) in sentences.iter().enumerate() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}. {}", i + 1, sentence),
+                        Style::default().fg(Color::White),
+                    )));
+                }
+                lines.push(Line::from(""));
+            }
+
+            lines.push(Line::from(Span::styled(
+                "Press Esc or Enter to close",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            let block = Block::default()
+                .title(Span::styled(
+                    " Card Detail ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Blue));
+
+            let paragraph = Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false })
+                .scroll((*scroll as u16, 0));
+
+            frame.render_widget(paragraph, area);
+        }
+
         PopupState::Help { scroll } => {
             let area = centered_rect(65, 85, frame.size());
             frame.render_widget(Clear, padded_rect(area, frame.size()));

@@ -1408,6 +1408,36 @@ pub fn get_vocabulary_sentence_count(conn: &Connection, vocabulary_id: i64) -> R
     Ok(count)
 }
 
+/// Get all collected sentence texts for a vocabulary item.
+/// Returns the surface text of each sentence (concatenated token surfaces).
+pub fn get_all_vocabulary_sentence_texts(
+    conn: &Connection,
+    vocabulary_id: i64,
+) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT paragraph_id, sentence_index FROM vocabulary_sentences WHERE vocabulary_id = ?1",
+    )?;
+    let rows: Vec<(i64, i32)> = stmt
+        .query_map(params![vocabulary_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut sentences = Vec::new();
+    for (para_id, sent_idx) in rows {
+        let mut tok_stmt = conn.prepare(
+            "SELECT surface FROM tokens WHERE paragraph_id = ?1 AND sentence_index = ?2 ORDER BY position",
+        )?;
+        let text: String = tok_stmt
+            .query_map(params![para_id, sent_idx], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !text.is_empty() {
+            sentences.push(text);
+        }
+    }
+    Ok(sentences)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

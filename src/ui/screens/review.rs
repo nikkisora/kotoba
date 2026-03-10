@@ -658,13 +658,42 @@ fn render_sentence_context(frame: &mut Frame, state: &ReviewState, area: Rect, b
             token.surface.clone()
         };
 
-        let reading_part = if !token.reading.is_empty() && token.reading != display_surface {
-            format!(" ({})", token.reading)
+        // Aggregate reading from all group members (same as sidebar logic)
+        let display_reading: String = if let Some(gid) = token.group_id {
+            card_data
+                .sentence_tokens
+                .iter()
+                .filter(|t| t.group_id == Some(gid))
+                .map(|t| {
+                    if !t.surface_reading.is_empty() {
+                        t.surface_reading.as_str()
+                    } else if !t.reading.is_empty() {
+                        t.reading.as_str()
+                    } else {
+                        t.surface.as_str()
+                    }
+                })
+                .collect()
+        } else if !token.surface_reading.is_empty() {
+            token.surface_reading.clone()
+        } else {
+            token.reading.clone()
+        };
+        let reading_part = if !display_reading.is_empty() && display_reading != display_surface {
+            format!(" ({})", display_reading)
         } else {
             String::new()
         };
 
-        let gloss_part = if !token.mwe_gloss.is_empty() {
+        // Show user translation > MWE gloss > JMdict gloss (same priority as sidebar)
+        let key = (token.base_form.clone(), token.reading.clone());
+        let user_translation = state
+            .vocabulary_cache
+            .get(&key)
+            .and_then(|v| v.translation.as_ref());
+        let gloss_part = if let Some(trans) = user_translation {
+            format!(" = {}", trans)
+        } else if !token.mwe_gloss.is_empty() {
             format!(" = {}", token.mwe_gloss)
         } else if !token.short_gloss.is_empty() {
             format!(" = {}", token.short_gloss)

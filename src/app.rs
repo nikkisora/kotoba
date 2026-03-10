@@ -88,6 +88,17 @@ pub enum PopupState {
     },
     /// Delete SRS card confirmation.
     DeleteCardConfirm { card_id: i64 },
+    /// Card detail popup in card browser — word detail plus sentence contexts.
+    CardDetail {
+        base_form: String,
+        reading: String,
+        entries: Vec<DictEntry>,
+        conjugations: Vec<(String, i32)>,
+        notes: Option<String>,
+        translation: Option<String>,
+        sentences: Vec<String>,
+        scroll: usize,
+    },
 }
 
 /// A token as displayed in the reader.
@@ -2969,6 +2980,17 @@ impl App {
         let cards = models::get_all_srs_cards(&conn, 1000)?;
         let now = chrono::Utc::now().naive_utc();
 
+        // Load user expressions once for MWE detection
+        let user_expressions = models::list_user_expressions(&conn).unwrap_or_default();
+
+        // Cache: vocabulary_id -> (full_surface, full_reading, mwe_gloss)
+        // This avoids re-detecting MWE for duplicate vocabulary_ids across cards.
+        let mut mwe_cache: std::collections::HashMap<i64, Option<(String, String, String)>> =
+            std::collections::HashMap::new();
+        // Cache: base_form -> JMdict short gloss
+        let mut gloss_cache: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
         let mut entries: Vec<CardBrowserEntry> = Vec::new();
         for card in cards {
             let vocabulary = card
@@ -2981,8 +3003,31 @@ impl App {
                     .flatten()
             });
 
+            // For word cards, detect MWE to show the full expression surface
+            let mwe_info = if let (Some(ref v), Some(vid)) = (&vocabulary, card.vocabulary_id) {
+                if let Some(cached) = mwe_cache.get(&vid) {
+                    cached.clone()
+                } else {
+                    let info = self.detect_mwe_for_vocabulary(
+                        &conn,
+                        vid,
+                        &v.base_form,
+                        &v.reading,
+                        &user_expressions,
+                    );
+                    mwe_cache.insert(vid, info.clone());
+                    info
+                }
+            } else {
+                None
+            };
+
             let display_front = if let Some(ref v) = vocabulary {
-                format!("{} ({})", v.base_form, v.reading)
+                if let Some((ref surface, ref reading, _)) = mwe_info {
+                    format!("{} ({})", surface, reading)
+                } else {
+                    format!("{} ({})", v.base_form, v.reading)
+                }
             } else if let Some(ref st) = sentence_translation {
                 let truncated: String = st.sentence_text.chars().take(40).collect();
                 if st.sentence_text.len() > 40 {
@@ -2994,10 +3039,21 @@ impl App {
                 format!("Card #{}", card.id)
             };
 
+            // Translation priority: user translation > MWE gloss > JMdict short gloss
             let display_back = if let Some(ref st) = sentence_translation {
                 st.translation.clone()
             } else if let Some(ref v) = vocabulary {
-                v.translation.clone().unwrap_or_default()
+                if let Some(ref trans) = v.translation {
+                    trans.clone()
+                } else if let Some((_, _, ref gloss)) = mwe_info {
+                    if !gloss.is_empty() {
+                        gloss.clone()
+                    } else {
+                        Self::get_cached_gloss(&conn, &v.base_form, &mut gloss_cache)
+                    }
+                } else {
+                    Self::get_cached_gloss(&conn, &v.base_form, &mut gloss_cache)
+                }
             } else {
                 String::new()
             };
@@ -3058,6 +3114,197 @@ impl App {
         });
         self.previous_screen = Some(self.screen.clone());
         self.screen = Screen::CardBrowser;
+        Ok(())
+    }
+
+    /// Detect MWE for a vocabulary item by loading one sentence's tokens and
+    /// running conjugation grouping + MWE detection. Returns the full surface,
+    /// reading, and gloss if the vocabulary is part of an MWE group.
+    fn detect_mwe_for_vocabulary(
+        &self,
+        conn: &rusqlite::Connection,
+        vocab_id: i64,
+        base_form: &str,
+        reading: &str,
+        user_expressions: &[models::UserExpression],
+    ) -> Option<(String, String, String)> {
+        let db_tokens = models::get_random_sentence_tokens_for_vocab(conn, vocab_id).ok()?;
+        if db_tokens.is_empty() {
+            return None;
+        }
+
+        let mut sentence_tokens: Vec<TokenDisplay> = db_tokens
+            .iter()
+            .map(|t| TokenDisplay {
+                surface: t.surface.clone(),
+                base_form: t.base_form.clone(),
+                reading: t.reading.clone(),
+                surface_reading: t.surface_reading.clone(),
+                pos: t.pos.clone(),
+                vocabulary_status: VocabularyStatus::New,
+                is_selected: false,
+                short_gloss: String::new(),
+                conjugation_form: String::new(),
+                conjugation_type: String::new(),
+                is_trivial: is_trivial_pos(&t.pos, &t.surface),
+                group_id: None,
+                is_group_head: false,
+                conjugation_desc: String::new(),
+                mwe_gloss: String::new(),
+            })
+            .collect();
+
+        apply_conjugation_groups(&mut sentence_tokens);
+        let mwe_matches = detect_sentence_mwes(conn, &sentence_tokens, user_expressions, 12);
+        apply_mwe_matches(&mut sentence_tokens, &mwe_matches);
+
+        // Find the target token and check if it's in a group
+        let target = sentence_tokens
+            .iter()
+            .find(|t| t.base_form == base_form && t.reading == reading)?;
+
+        let gid = target.group_id?;
+
+        let surface: String = sentence_tokens
+            .iter()
+            .filter(|t| t.group_id == Some(gid))
+            .map(|t| t.surface.as_str())
+            .collect();
+        let full_reading: String = sentence_tokens
+            .iter()
+            .filter(|t| t.group_id == Some(gid))
+            .map(|t| {
+                if !t.surface_reading.is_empty() {
+                    t.surface_reading.as_str()
+                } else if !t.reading.is_empty() {
+                    t.reading.as_str()
+                } else {
+                    t.surface.as_str()
+                }
+            })
+            .collect();
+
+        // Get the MWE gloss from the group head
+        let gloss = sentence_tokens
+            .iter()
+            .find(|t| t.group_id == Some(gid) && t.is_group_head)
+            .map(|t| t.mwe_gloss.clone())
+            .unwrap_or_default();
+
+        // Only return if this is actually a multi-token group (not just conjugation of the same word)
+        if surface != base_form {
+            Some((surface, full_reading, gloss))
+        } else {
+            None
+        }
+    }
+
+    /// Get a cached JMdict short gloss for a base_form.
+    fn get_cached_gloss(
+        conn: &rusqlite::Connection,
+        base_form: &str,
+        cache: &mut std::collections::HashMap<String, String>,
+    ) -> String {
+        if let Some(cached) = cache.get(base_form) {
+            return cached.clone();
+        }
+        let gloss = dictionary::lookup(conn, base_form, None)
+            .ok()
+            .and_then(|entries| entries.first().map(|e| e.short_gloss()))
+            .unwrap_or_default();
+        cache.insert(base_form.to_string(), gloss.clone());
+        gloss
+    }
+
+    /// Open the card detail popup for the selected card in the card browser.
+    pub fn open_card_browser_detail(&mut self) -> Result<()> {
+        let entry = {
+            let filtered = self.card_browser_filtered_entries();
+            let state = match self.card_browser_state.as_ref() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            filtered
+                .get(state.selected)
+                .and_then(|&idx| state.entries.get(idx))
+                .cloned()
+        };
+        let entry = match entry {
+            Some(e) => e,
+            None => return Ok(()),
+        };
+
+        let conn = self.open_db()?;
+
+        if let Some(ref v) = entry.vocabulary {
+            // Word card — show dictionary entries, conjugations, notes, sentences
+            let base_form = v.base_form.clone();
+            let reading = v.reading.clone();
+
+            // Try MWE surface for dictionary lookup
+            let user_expressions = models::list_user_expressions(&conn).unwrap_or_default();
+            let mwe_info = self.detect_mwe_for_vocabulary(
+                &conn,
+                v.id,
+                &base_form,
+                &reading,
+                &user_expressions,
+            );
+
+            let (display_form, entries) = if let Some((ref surface, _, _)) = mwe_info {
+                let mwe_entries = dictionary::lookup(&conn, surface, None)?;
+                if mwe_entries.is_empty() {
+                    (
+                        base_form.clone(),
+                        dictionary::lookup(&conn, &base_form, None)?,
+                    )
+                } else {
+                    (surface.clone(), mwe_entries)
+                }
+            } else {
+                (
+                    base_form.clone(),
+                    dictionary::lookup(&conn, &base_form, None)?,
+                )
+            };
+
+            let conjugations = {
+                let mut stmt = conn.prepare(
+                    "SELECT surface, encounter_count FROM conjugation_encounters WHERE vocabulary_id = ?1 ORDER BY encounter_count DESC"
+                )?;
+                let rows = stmt.query_map(rusqlite::params![v.id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+                })?;
+                rows.filter_map(|r| r.ok()).collect()
+            };
+
+            let sentences =
+                models::get_all_vocabulary_sentence_texts(&conn, v.id).unwrap_or_default();
+
+            self.popup = Some(PopupState::CardDetail {
+                base_form: display_form,
+                reading: reading.clone(),
+                entries,
+                conjugations,
+                notes: v.notes.clone(),
+                translation: v.translation.clone(),
+                sentences,
+                scroll: 0,
+            });
+        } else if let Some(ref st) = entry.sentence_translation {
+            // Sentence card — show as a simple word detail with the sentence + translation
+            self.popup = Some(PopupState::CardDetail {
+                base_form: st.sentence_text.clone(),
+                reading: String::new(),
+                entries: vec![],
+                conjugations: vec![],
+                notes: None,
+                translation: Some(st.translation.clone()),
+                sentences: vec![],
+                scroll: 0,
+            });
+        }
+
         Ok(())
     }
 

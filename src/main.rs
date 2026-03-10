@@ -456,6 +456,12 @@ fn handle_card_browser_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
+        KeyCode::Enter => {
+            // Open card detail popup
+            if let Err(e) = app.open_card_browser_detail() {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
         KeyCode::Char('d') => {
             // Delete selected card (with confirmation)
             let card_id = {
@@ -728,6 +734,20 @@ fn handle_popup_key(app: &mut App, key: KeyEvent, popup: &PopupState) {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if let Some(PopupState::WordDetail { ref mut scroll, .. }) = app.popup {
+                    *scroll += 1;
+                }
+            }
+            _ => {}
+        },
+        PopupState::CardDetail { .. } => match key.code {
+            KeyCode::Esc | KeyCode::Enter => app.popup = None,
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(PopupState::CardDetail { ref mut scroll, .. }) = app.popup {
+                    *scroll = scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(PopupState::CardDetail { ref mut scroll, .. }) = app.popup {
                     *scroll += 1;
                 }
             }

@@ -134,14 +134,16 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         frame.render_widget(msg, inner_area);
     } else {
         // Fixed column widths (in terminal columns), including trailing space as separator.
-        // marker(2) + type(6) + front(variable) + state(7) + due(10)
+        // marker(2) + type(6) + front(variable) + translation(variable) + state(7) + due(10)
         let col_type: usize = 6;
         let col_state: usize = 7;
         let col_due: usize = 10;
 
-        // Front column takes remaining width
+        // Front and translation columns share remaining width (60/40 split)
         let fixed = 2 + col_type + col_state + col_due;
-        let col_front = (inner_area.width as usize).saturating_sub(fixed).max(12);
+        let remaining = (inner_area.width as usize).saturating_sub(fixed).max(20);
+        let col_front = (remaining * 55 / 100).max(10);
+        let col_trans = remaining.saturating_sub(col_front).max(8);
 
         let hdr_style = Style::default()
             .fg(Color::DarkGray)
@@ -152,6 +154,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             Span::styled("  ", hdr_style),
             Span::styled(pad_to_width("Type", col_type), hdr_style),
             Span::styled(pad_to_width("Word / Sentence", col_front), hdr_style),
+            Span::styled(pad_to_width("Translation", col_trans), hdr_style),
             Span::styled(pad_to_width("State", col_state), hdr_style),
             Span::styled(pad_to_width("Due", col_due), hdr_style),
         ]);
@@ -208,6 +211,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 ),
                 Span::styled(pad_to_width(&entry.display_front, col_front), style),
                 Span::styled(
+                    pad_to_width(&entry.display_back, col_trans),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
                     pad_to_width(state_label, col_state),
                     Style::default().fg(state_color),
                 ),
@@ -231,7 +238,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Status bar
     let status = Line::from(vec![Span::styled(
-        " ↑↓:navigate  ←→:page  d:delete  r:reset  R:retire  f:filter  s:sort  Esc:back ",
+        " ↑↓:navigate  ←→:page  Enter:detail  d:delete  r:reset  f:filter  s:sort  Esc:back ",
         Style::default().fg(Color::DarkGray),
     )]);
     frame.render_widget(
