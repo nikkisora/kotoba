@@ -2,155 +2,267 @@
 
 Everything below is **not yet implemented**. For a description of what the app currently does, see `DESCRIPTION.md`.
 
----
-
-## Phase 5 — LLM Integration ✅
-
-**Goal**: On-demand structured sentence analysis via OpenAI-compatible API.
-
-### 5.1 LLM Client
-- [x] Implement `core/llm.rs`:
-  - `analyze_sentence()` function with `LlmConfig` (endpoint, api_key, model, max_tokens)
-  - Load config from TOML `[llm]` section
-  - System prompt bundled at compile time via `include_str!("data/system_prompt.txt")`
-  - Structured JSON output: `translation`, `component_breakdown` (japanese/romaji/meaning), `explanation`
-  - POST to `{endpoint}/chat/completions` with `response_format: { type: "json_object" }`
-  - Parse response into `SentenceAnalysis` struct; handles markdown code fences
-  - Context support: up to 3 previous sentences included in user message
-  - Default: OpenRouter endpoint, `google/gemini-3.1-flash-lite-preview` model
-
-### 5.2 Caching Layer
-- [x] Before making API call, hash `sha256(sentence + model)` and check `llm_cache` table
-- [x] On cache hit: deserialize stored JSON response, return immediately
-- [x] On cache miss: make API call, store response + metadata (model, tokens_used) in `llm_cache`
-- [x] Cache invalidation: `kotoba cache clear` and `kotoba cache stats` CLI commands
-
-### 5.3 Async TUI Integration
-- [x] In `ui/events.rs`, `LlmEvent` enum with `AnalysisComplete` and `Failed` variants
-- [x] `Ctrl+T` in Reader toggles LLM sidebar (`l` reserved for vim-style navigation):
-  - Check cache first (synchronous, fast)
-  - If cache miss: spawn `std::thread::spawn` (sync mpsc event loop) with blocking HTTP call
-  - Show loading spinner in sidebar: rotating braille animation
-  - On completion: send result through `mpsc` channel -> event loop picks it up -> update sidebar
-- [x] Display LLM result in sidebar (replacing word list temporarily):
-  - **Translation**: full sentence translation at top
-  - **Component breakdown**: table of japanese + romaji + meaning
-  - **Explanation**: free-form contextual explanation
-  - Press `Esc` or `Ctrl+T` again to dismiss and return to JMdict word list view
-- [x] LLM translation saved to `sentence_translations` table (same as user-provided)
-- [x] LLM settings configurable in Settings screen (endpoint, api_key, model, max_tokens)
-
-### 5.4 LLM in SRS Review
-- [x] `Ctrl+L` in SRS review triggers LLM analysis of the card's source sentence
-- [x] Result shown in a side panel
-- [x] Same caching applies — most sentences will already be cached from Reader usage
+Completed phases: 1 (Core DB + Tokenizer), 2 (Reader + SRS), 3 (Import Sources), 4 (Library + Card Browser + Settings), 5 (LLM Integration), 5.5 (Home Activity Dashboard), 6 (Stats Screen), 7 (Theming + Configuration — partial).
 
 ---
 
-## Phase 5.5 — Home Screen Activity Dashboard ✅
+## Phase 7 — Polish (Remaining)
 
-**Goal**: Enrich the home screen with an interactive activity heatmap and quick stats.
+**Goal**: Finish the last two items from the original Phase 7.
 
-### 5.5.1 Daily Activity Tracking
-- [x] New `daily_activity` table (migration 20): date, sentences_read, reviews_completed, words_learned
-- [x] Increment counters automatically: sentence advance in Reader, review completion, word status → Learning1
+### 7.3 Loading States
+- [ ] Global spinner overlay for any blocking operation > 200ms
+  - Track `app.loading: Option<&str>` with a message like "Importing…", "Loading dictionary…"
+  - Render a centered braille spinner + message when `loading` is `Some`
+  - Wrap long-running sync operations (dict import, text import from CLI path, chapter open) with loading state
+  - The background importer already has per-chapter spinners — this is for the remaining sync paths
 
-### 5.5.2 Activity Queries
-- [x] `get_daily_activity(conn, days)` — activity records for heatmap grid
-- [x] `get_activity_streak(conn)` — consecutive days with any activity (reading or SRS)
-- [x] `get_vocabulary_summary(conn)` — total known/learning word counts
-- [x] `get_reviews_today(conn)` — reviews completed today
-- [x] `get_recent_accuracy(conn)` — 7-day review accuracy percentage
-
-### 5.5.3 Home Screen Redesign
-- [x] Layout: Activity heatmap (65%) + Quick Stats panel (35%) above the text list
-- [x] GitHub-style contribution heatmap: 26 weeks (~6 months), Mon-Sun rows
-  - 5 color intensity levels: empty, low (1-19), moderate (20-79), high (80-159), max (160+)
-  - Month labels along the top, day-of-week labels on the left
-  - Today highlighted with underline
-  - Legend with color scale
-- [x] Quick Stats panel: streak (with fire emoji), words known/learning, reviews today, due now, 7-day accuracy
-- [x] Two-panel focus system: Tab/BackTab switches between Heatmap and TextList
-  - Heatmap: arrow keys navigate cursor, selected day shows detailed breakdown (reviews/sentences/words)
-  - TextList: existing navigation (Up/Down, Enter to open, f to toggle finished)
-  - Active panel border highlighted with accent color
-- [x] Heatmap colors added to Theme struct: `heatmap_empty`, `heatmap_low`, `heatmap_mid`, `heatmap_high`, `heatmap_max`, `heatmap_cursor`
-  - All 4 built-in themes updated with appropriate heatmap colors
-  - Custom theme TOML overrides supported via `[ui]` section
+### 7.4 Man Page Generation
+- [ ] Restructure crate into `lib.rs` + `bin/main.rs` so `clap_mangen` can generate man pages at build time
+  - Move all modules under `lib.rs` re-exports
+  - `build.rs` generates man pages into `target/man/`
+  - Add `kotoba.1` installation instructions to README
 
 ---
 
-## Phase 6 — Stats Screen ✅
+## Phase 8 — AnkiConnect Export
 
-**Goal**: Visualize learning progress with terminal-based charts and metrics.
+**Goal**: One-way sync to push vocabulary cards to Anki via the AnkiConnect local API.
 
-### 6.1 Stats Data Queries
-- [x] Implement `db/stats.rs`:
-  - `get_known_words_over_time(conn, days)` — cumulative Known word count over time with baseline
-  - `get_words_by_status(conn)` — `HashMap<VocabularyStatus, usize>` breakdown of all status levels
-  - `get_reading_activity(conn, days)` — daily reading activity (delegates to `daily_activity` table)
-  - `get_srs_stats(conn) -> SrsStats` — due today/tomorrow, total reviews, reviews today, 7d/30d accuracy, retention rate, card counts by state
-  - `get_text_coverage(conn, text_id) -> CoverageStats` — total/known/learning/new/ignored tokens + coverage %
-  - `get_all_text_coverages(conn)` — coverage for all read texts
-  - `get_overview_stats(conn) -> OverviewStats` — texts read, total/known/learning/new/ignored word counts
+### 8.1 AnkiConnect Client
+- [ ] Implement `core/anki.rs`:
+  - `AnkiConnectClient` struct wrapping HTTP calls to `http://localhost:8765`
+  - Actions: `version`, `deckNames`, `modelNames`, `modelFieldNames`, `addNote`, `addNotes`, `findNotes`, `notesInfo`
+  - Error handling: connection refused (Anki not running), permission denied (user must click Allow), invalid model
+  - Configurable deck name and note type in `[anki]` TOML section
 
-### 6.2 Stats Screen UI
-- [x] Implement `ui/screens/stats.rs`:
-  - **Overview panel**: texts read, total vocabulary, known/learning/new/ignored counts, activity streak
-  - **Vocabulary growth chart**: ASCII block-character line chart showing cumulative Known words over time
-  - **Status breakdown**: horizontal stacked color bar (Known | L1 | L2 | L3 | L4 | New | Ignored) with legend percentages
-  - **SRS panel**: due now/tomorrow, reviews today/total, 7d/30d accuracy, retention rate, card counts by state
-  - **Per-text coverage**: selectable list with coverage bar + percentage, detail panel for selected text
-- [x] Two-panel focus: Tab switches between stats panels (left) and coverage list (right), active panel highlighted
-- [x] Keybindings:
-  - `Tab`/`BackTab` — switch focus between stats and coverage panels
-  - `↑`/`↓` — scroll stats or navigate coverage list
-  - `t` — toggle time range (7d / 30d / 90d / All) — reloads data for new range
-  - `Enter` on a text in coverage list — jump to Reader for that text
-  - `Esc` — back to previous screen
-- [x] Accessible from Home screen via `S` key
+### 8.2 Note Mapping
+- [ ] Define default note type mapping:
+  - **Word cards** → fields: `Word`, `Reading`, `Meaning`, `Sentence`, `SentenceTranslation`, `Notes`
+  - **Sentence cards** → fields: `Sentence`, `Translation`, `Notes`
+  - Allow custom field mapping in config: `[anki.field_map]` section
+- [ ] Duplicate detection: query AnkiConnect for existing notes by word/sentence before adding
+- [ ] Tag strategy: tag with `kotoba`, source text title, vocabulary status
+
+### 8.3 Export UI
+- [ ] `kotoba export anki` CLI command — batch export all Learning/Known cards not yet synced
+  - Track `anki_note_id` in `srs_cards` table (nullable, set after successful push)
+  - `--dry-run` flag to preview what would be exported
+  - `--deck <name>` override
+- [ ] TUI integration: `A` key in Card Browser to export selected card, `Ctrl+A` to batch export filtered set
+- [ ] Export summary: cards added, skipped (duplicate), failed
 
 ---
 
-## Phase 7 — Theming, Configuration & Polish
+## Phase 9 — Pitch Accent Data
 
-**Goal**: Customization, UX refinements, and release readiness.
+**Goal**: Display pitch accent patterns for words using accent dictionary data.
 
-### 7.1 Theming Engine
-- [x] Implement theme loading from `theme.toml`:
-  - Parse hex colors into `Color::Rgb(r, g, b)`
-  - Provide 2-3 built-in themes: Tokyo Night (dark), Solarized Light, Gruvbox
-  - Fallback to 256-color or 16-color palette if terminal doesn't support RGB
-- [x] Thread theme through all 14 UI files, replacing all hardcoded colors
-- [x] Theme selection in Settings screen with live preview
+### 9.1 Accent Dictionary
+- [ ] Data source: bundled OJAD-style accent CSV or NHK accent dictionary (evaluate licensing)
+  - Fallback: parse Kanjium pitch accent data (CC-BY, widely used in Anki community)
+  - Schema: `pitch_accents` table with `reading TEXT, accent_pattern TEXT, source TEXT`
+  - `kotoba setup-pitch` CLI command to download and import accent data
+- [ ] Lookup function: `get_pitch_accent(conn, reading) -> Vec<PitchAccent>`
+  - Handle multiple accent patterns per word (common in Japanese)
+  - Match by reading (hiragana), not surface form
 
-### 7.2 Configuration
-- [x] CLI command `kotoba config` — print current config location and values
-- [x] XDG-compliant paths: config in `$XDG_CONFIG_HOME/kotoba/`, data in `$XDG_DATA_HOME/kotoba/`
-
-### 7.3 UX Polish
-- [x] Consistent popup system: all popups use same border style, close with `Esc`, support scrolling
-- [x] Error handling: user-friendly error messages in status bar (not panics)
-- [ ] Loading states: spinner for any operation > 200ms
-- [x] First-run experience: detect missing JMdict, show warning banner on home screen
-- [x] Mouse support: click on words in Reader to select them, scroll wheel to navigate sentences
-
-### 7.4 Build & Distribution
-- [x] `cargo build --release` — single static binary
-- [x] GitHub Actions CI: build for Linux (x86_64, aarch64), macOS (x86_64, aarch64), Windows (x86_64)
-- [x] Include JMdict download via `kotoba setup-dict` command
-- [x] Write `--help` text for all CLI subcommands (with long_about descriptions)
-- [ ] Man page generation via `clap_mangen` (requires lib+bin restructure)
+### 9.2 Pitch Accent Display
+- [ ] Visual rendering in `ui/components/pitch.rs`:
+  - Horizontal pitch diagram: ＼ for downstep, lines for high/low mora
+  - Color-coded: high mora in one color, low mora in another
+  - Accent type label: 平板 (heiban), 頭高 (atamadaka), 中高 (nakadaka), 尾高 (odaka)
+- [ ] Integration points:
+  - Reader sidebar: show pitch accent below word reading
+  - WordDetail popup: pitch accent section with diagram
+  - Review cards: optional pitch accent display (configurable)
+- [ ] Theme colors: `pitch_high`, `pitch_low`, `pitch_downstep` added to Theme struct
 
 ---
 
-## Phase 8 — Future Enhancements (Deferred)
+## Phase 10 — Audio & TTS
 
-- [ ] **AnkiConnect export**: One-way sync to push vocabulary cards to Anki via AnkiConnect API
-- [ ] **Pitch accent data**: Integrate OJAD or NHK accent dictionary, display in word detail popup
-- [ ] **Audio/TTS**: System TTS or cloud TTS API for word/sentence pronunciation
-- [ ] **Additional web sources**: News sites (NHK News Easy, Asahi), custom per-source TUI screens
-- [ ] **PDF import**: Extract text layers from PDFs
-- [ ] **Multi-language support**: Generalize beyond Japanese (Chinese, Korean — different tokenizers)
-- [ ] **Cloud sync**: Optional sync of vocabulary/SRS state across devices
-- [ ] **Plugin system**: User-defined import sources or LLM prompt templates
+**Goal**: Add pronunciation audio for words and sentences.
+
+### 10.1 TTS Backend
+- [ ] Pluggable TTS backend in `core/audio.rs`:
+  - **System TTS**: Use `say` (macOS), `espeak-ng` (Linux), or `SAPI` (Windows) via `std::process::Command`
+  - **Cloud TTS**: Optional OpenAI TTS API (`/v1/audio/speech`) or Google Cloud TTS
+  - Backend selection in `[audio]` TOML section: `backend = "system"` | `"openai"` | `"none"`
+- [ ] Audio caching: store generated audio in `$XDG_CACHE_HOME/kotoba/audio/` keyed by hash of text + voice
+  - Cache lookup before TTS call
+  - `kotoba cache clear --audio` to clear audio cache
+
+### 10.2 Playback Integration
+- [ ] Cross-platform audio playback via `rodio` crate (lightweight, pure Rust)
+  - Play in background thread, non-blocking
+  - Queue system: if already playing, queue next clip
+- [ ] Keybindings:
+  - Reader: `p` play current sentence, `Ctrl+P` play selected word
+  - Review: `p` play card's sentence, auto-play on card reveal (configurable)
+- [ ] Settings: `[audio]` section with `auto_play_review`, `voice` (for cloud TTS), `speed` (0.5-2.0)
+
+---
+
+## Phase 11 — Additional Web Sources
+
+**Goal**: Expand content import with structured web source support.
+
+### 11.1 Source Framework
+- [ ] Generalize the Syosetu importer into a pluggable source trait:
+  ```rust
+  trait WebSource {
+      fn name(&self) -> &str;
+      fn matches_url(&self, url: &str) -> bool;
+      fn fetch_metadata(&self, url: &str) -> Result<SourceMetadata>;
+      fn fetch_chapter_list(&self, url: &str) -> Result<Vec<ChapterInfo>>;
+      fn fetch_chapter_text(&self, url: &str) -> Result<String>;
+  }
+  ```
+- [ ] Source registry: `Vec<Box<dyn WebSource>>` checked in order for URL matching
+- [ ] Existing Syosetu importer refactored to implement the trait
+
+### 11.2 NHK News Easy
+- [ ] `import/nhk.rs`: Fetch article list from NHK News Easy API
+  - Article metadata: title, date, category, has_audio flag
+  - Ruby annotations available in HTML (extract furigana directly)
+  - Article list browsable in a dedicated TUI screen or via import menu
+- [ ] `kotoba nhk` CLI subcommand: list recent articles, import by ID or URL
+
+### 11.3 Aozora Bunko
+- [ ] `import/aozora.rs`: Import from Aozora Bunko (public domain Japanese literature)
+  - Parse Aozora-specific HTML formatting (ruby, notes, annotations)
+  - Author + title metadata extraction
+  - `kotoba aozora <url>` CLI subcommand
+
+### 11.4 Generic RSS/Atom
+- [ ] `import/rss.rs`: Subscribe to Japanese RSS/Atom feeds
+  - Feed management: add, remove, list feeds in config
+  - Periodic refresh (manual, not background daemon)
+  - `kotoba feed add <url>`, `kotoba feed list`, `kotoba feed refresh`
+  - New articles appear in Library with feed source metadata
+
+---
+
+## Phase 12 — PDF Import
+
+**Goal**: Extract readable text from PDF documents.
+
+### 12.1 PDF Text Extraction
+- [ ] Implement `import/pdf.rs`:
+  - Use `pdf-extract` or `lopdf` crate for text layer extraction
+  - Handle CJK font encoding (common issue with Japanese PDFs)
+  - Preserve paragraph structure where possible (use vertical spacing heuristics)
+  - Fallback: warn user if PDF has no text layer (scanned image)
+- [ ] Page-based chapter splitting:
+  - Default: one chapter per N pages (configurable, default 10)
+  - Optional: split at detected headings or page breaks
+  - `kotoba import file.pdf --pages-per-chapter 5`
+
+### 12.2 Vertical Text Handling
+- [ ] Detect vertical text layout in PDF metadata
+  - Re-order extracted text for horizontal reading flow
+  - Column detection for multi-column layouts
+- [ ] User override: `--layout horizontal` | `vertical` flag on import
+
+---
+
+## Phase 13 — Cloud Sync
+
+**Goal**: Optional sync of vocabulary and SRS state across devices.
+
+### 13.1 Sync Protocol
+- [ ] Design a lightweight sync format:
+  - Export: `kotoba sync export` → JSON snapshot of vocabulary + SRS cards + review logs + settings
+  - Import: `kotoba sync import <file>` → merge into local DB
+  - Conflict resolution: last-write-wins by `updated_at` timestamp per row
+  - Add `updated_at TIMESTAMP` and `sync_id UUID` columns to vocabulary, srs_cards, srs_reviews
+
+### 13.2 Sync Backend
+- [ ] File-based sync (MVP): export/import JSON files manually (Dropbox, Google Drive, USB)
+  - `kotoba sync export --output ~/Dropbox/kotoba-sync.json`
+  - `kotoba sync import ~/Dropbox/kotoba-sync.json`
+  - Merge log: show what was added/updated/conflicted
+- [ ] Optional remote backend (future): simple REST API or S3-compatible object storage
+  - `[sync]` TOML section: `backend = "file"` | `"s3"`, `endpoint`, `bucket`, `api_key`
+  - `kotoba sync push` / `kotoba sync pull`
+
+### 13.3 Selective Sync
+- [ ] Choose what to sync: vocabulary only, SRS state, review history, settings
+  - `kotoba sync export --include vocab,srs` flag
+- [ ] Sync status indicator on home screen: last sync time, pending changes count
+
+---
+
+## Phase 14 — Multi-Language Support
+
+**Goal**: Generalize beyond Japanese to support Chinese, Korean, and potentially other languages.
+
+### 14.1 Tokenizer Abstraction
+- [ ] Define `Tokenizer` trait:
+  ```rust
+  trait Tokenizer {
+      fn tokenize(&self, text: &str) -> Vec<Token>;
+      fn language(&self) -> Language;
+  }
+  ```
+- [ ] Refactor current lindera/UniDic tokenizer to implement the trait
+- [ ] Language enum: `Japanese`, `Chinese`, `Korean`, `Other`
+- [ ] Per-text language tag stored in `texts` table
+
+### 14.2 Chinese Support
+- [ ] `jieba-rs` integration for Chinese word segmentation
+  - POS tagging via jieba's built-in POS tagger
+  - No furigana equivalent (pinyin shown in sidebar instead)
+- [ ] Dictionary: CC-CEDICT (Chinese-English dictionary, similar format to JMdict)
+  - `kotoba setup-dict --language chinese` to download and import
+  - Pinyin display in sidebar and word detail popup
+
+### 14.3 Korean Support
+- [ ] Korean tokenizer: evaluate `mecab-ko` bindings or pure-Rust alternatives
+  - Hangul syllable decomposition for reading display
+- [ ] Dictionary: KENGDIC or similar Korean-English dictionary
+  - `kotoba setup-dict --language korean`
+
+### 14.4 UI Adaptations
+- [ ] Language-aware furigana: Japanese (hiragana above kanji), Chinese (pinyin), Korean (none)
+- [ ] Language-aware sentence splitting rules per language
+- [ ] Settings: default language selection, per-text language override
+
+---
+
+## Phase 15 — Plugin System
+
+**Goal**: User-extensible import sources and LLM prompt templates.
+
+### 15.1 Import Plugins
+- [ ] Plugin directory: `$XDG_CONFIG_HOME/kotoba/plugins/`
+- [ ] Plugin format: TOML manifest + Lua script (via `mlua` crate)
+  ```toml
+  # plugin.toml
+  name = "pixiv-novels"
+  version = "0.1.0"
+  type = "import"
+  url_pattern = "https://www.pixiv.net/novel/show.php\\?id=.*"
+  ```
+  ```lua
+  -- import.lua
+  function fetch(url)
+      local html = http.get(url)
+      return { title = extract_title(html), text = extract_text(html) }
+  end
+  ```
+- [ ] Sandboxed Lua environment: HTTP access (GET only), string manipulation, JSON parsing
+  - No filesystem access, no command execution
+- [ ] `kotoba plugin list`, `kotoba plugin install <path>`, `kotoba plugin remove <name>`
+
+### 15.2 LLM Prompt Templates
+- [ ] Custom system prompts stored in `$XDG_CONFIG_HOME/kotoba/prompts/`
+  - TOML format: name, description, system_prompt, expected output fields
+  - `[llm] prompt_template = "grammar-focus"` in config to select active template
+- [ ] Built-in templates:
+  - `default` — current translation + breakdown + explanation
+  - `grammar-focus` — emphasize grammar point identification
+  - `beginner` — simpler explanations, more romaji
+  - `advanced` — nuanced usage notes, register analysis
+- [ ] Template selection in Settings screen or via `Ctrl+T` menu in Reader
