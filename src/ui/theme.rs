@@ -60,6 +60,7 @@ impl Theme {
     /// Get a built-in theme by name.
     pub fn by_name(name: &str) -> Self {
         match name {
+            "light" => Self::light(),
             "solarized-light" => Self::solarized_light(),
             "gruvbox" => Self::gruvbox(),
             _ => Self::tokyo_night(), // default
@@ -68,7 +69,7 @@ impl Theme {
 
     /// List available built-in theme names.
     pub fn available_themes() -> Vec<&'static str> {
-        vec!["tokyo-night", "solarized-light", "gruvbox"]
+        vec!["tokyo-night", "light", "solarized-light", "gruvbox"]
     }
 
     /// Tokyo Night (dark) — the default theme.
@@ -111,6 +112,55 @@ impl Theme {
             cloze_reveal_fg: Color::Green,
             cloze_reveal_bg: Color::Rgb(30, 60, 30),
             chapter_in_progress: Color::Rgb(100, 150, 255),
+        }
+    }
+
+    /// Light theme — white background, black text, high contrast.
+    pub fn light() -> Self {
+        let white = Color::Rgb(255, 255, 255);
+        let black = Color::Rgb(30, 30, 30);
+        let gray50 = Color::Rgb(128, 128, 128);
+        let gray80 = Color::Rgb(200, 200, 200);
+        let gray93 = Color::Rgb(237, 237, 237);
+
+        Self {
+            bg: white,
+            fg: black,
+            title_bar_bg: Color::Rgb(240, 240, 240),
+
+            accent: Color::Rgb(0, 95, 175),   // strong blue
+            info: Color::Rgb(30, 120, 190),   // medium blue
+            success: Color::Rgb(30, 130, 50), // dark green
+            warning: Color::Rgb(170, 110, 0), // amber
+            error: Color::Rgb(190, 30, 30),   // dark red
+            muted: gray50,
+            subtle: Color::Rgb(130, 60, 160), // purple
+
+            vocab_new_bg: Color::Rgb(210, 230, 255), // light blue
+            vocab_new_fg: Color::Rgb(0, 60, 120),
+            vocab_l1_bg: Color::Rgb(255, 240, 200), // light amber
+            vocab_l1_fg: Color::Rgb(120, 70, 0),
+            vocab_l2_bg: Color::Rgb(255, 245, 220), // lighter amber
+            vocab_l2_fg: Color::Rgb(100, 60, 0),
+            vocab_l3_bg: Color::Rgb(230, 245, 230), // very light green
+            vocab_l3_fg: Color::Rgb(30, 90, 30),
+            vocab_l4_bg: gray93, // near-white
+            vocab_l4_fg: Color::Rgb(60, 60, 60),
+            vocab_ignored_fg: gray80,
+
+            review_vocab_new_bg: Color::Rgb(225, 238, 255),
+            review_vocab_l1_bg: Color::Rgb(255, 245, 225),
+            review_vocab_l2_bg: Color::Rgb(255, 248, 235),
+            review_vocab_l3_bg: Color::Rgb(240, 248, 240),
+            review_vocab_l4_bg: Color::Rgb(245, 245, 245),
+
+            progress_bar: Color::Rgb(30, 130, 50),
+            stats_text: gray50,
+            status_msg_fg: white,
+            status_msg_bg: Color::Rgb(170, 110, 0),
+            cloze_reveal_fg: Color::Rgb(30, 130, 50),
+            cloze_reveal_bg: Color::Rgb(230, 245, 230),
+            chapter_in_progress: Color::Rgb(0, 95, 175),
         }
     }
 
