@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -44,7 +44,7 @@ impl EventLoop {
                 // Poll for crossterm events
                 if event::poll(timeout).unwrap_or(false) {
                     match event::read() {
-                        Ok(CrosstermEvent::Key(key)) => {
+                        Ok(CrosstermEvent::Key(key)) if key.kind == KeyEventKind::Press => {
                             if event_tx.send(Event::Key(key)).is_err() {
                                 return; // Channel closed, exit thread
                             }

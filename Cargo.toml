@@ -38,3 +38,4 @@ arboard = "3.4"               # Cross-platform clipboard access
 scraper = "0.21"              # HTML parsing for web import
 zip = "2.1"                   # EPUB unarchiving (EPUB = ZIP)
 regex = "1"                   # Regex for subtitle parsing
+urlencoding = "2.1.3"

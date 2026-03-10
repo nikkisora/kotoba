@@ -2232,6 +2232,20 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
             }
         }
 
+        // Open selected word on Jisho.org
+        KeyCode::Char('g') => {
+            if let Err(e) = app.open_word_in_jisho() {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+
+        // Open current sentence in browser translation service (DeepL/Google)
+        KeyCode::Char('G') => {
+            if let Err(e) = app.open_sentence_in_browser() {
+                app.set_message(format!("Error: {}", e));
+            }
+        }
+
         // Mark expression (enter expression marking mode)
         KeyCode::Char('m') => {
             if let Some(ref mut state) = app.reader_state {

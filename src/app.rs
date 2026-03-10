@@ -2815,6 +2815,116 @@ impl App {
         Ok(())
     }
 
+    // ─── Browser Lookup ────────────────────────────────────────────────────
+
+    /// Open a URL in the default browser (cross-platform).
+    fn open_in_browser(url: &str) -> std::io::Result<std::process::Child> {
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "", url])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .arg(url)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            std::process::Command::new("xdg-open")
+                .arg(url)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        }
+    }
+
+    /// Open the selected word on Jisho.org in the default browser.
+    pub fn open_word_in_jisho(&mut self) -> Result<()> {
+        let word = {
+            let state = match self.reader_state.as_ref() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            let word_idx = match state.word_index {
+                Some(i) => i,
+                None => {
+                    self.set_message("Select a word first (←/→)");
+                    return Ok(());
+                }
+            };
+            let sentence = &state.sentences[state.sentence_index];
+            if word_idx >= sentence.tokens.len() {
+                return Ok(());
+            }
+            let token = &sentence.tokens[word_idx];
+            if token.is_trivial {
+                self.set_message("Select a word, not punctuation");
+                return Ok(());
+            }
+            token.base_form.clone()
+        };
+
+        let encoded = urlencoding::encode(&word);
+        let url = format!("https://jisho.org/search/{}", encoded);
+
+        match Self::open_in_browser(&url) {
+            Ok(_) => self.set_message(format!("Jisho: {}", word)),
+            Err(e) => self.set_message(format!("Failed to open browser: {}", e)),
+        }
+        Ok(())
+    }
+
+    /// Open the current sentence in an external translation service (DeepL or Google Translate).
+    pub fn open_sentence_in_browser(&mut self) -> Result<()> {
+        let text = {
+            let state = match self.reader_state.as_ref() {
+                Some(s) => s,
+                None => return Ok(()),
+            };
+            if state.sentences.is_empty() {
+                return Ok(());
+            }
+            let sentence = &state.sentences[state.sentence_index];
+            sentence
+                .tokens
+                .iter()
+                .map(|t| t.surface.as_str())
+                .collect::<String>()
+        };
+
+        let encoded = urlencoding::encode(&text);
+        let service = &self.config.reader.translation_service;
+        let url = match service.as_str() {
+            "google" => format!("https://translate.google.com/?sl=ja&tl=en&text={}", encoded),
+            _ => format!("https://www.deepl.com/translator#ja/en/{}", encoded),
+        };
+
+        match Self::open_in_browser(&url) {
+            Ok(_) => {
+                let label = if service == "google" {
+                    "Google Translate"
+                } else {
+                    "DeepL"
+                };
+                self.set_message(format!("Opened in {}", label));
+            }
+            Err(e) => {
+                self.set_message(format!("Failed to open browser: {}", e));
+            }
+        }
+        Ok(())
+    }
+
     // ─── Word Translation ────────────────────────────────────────────────
 
     /// Open word translation editor for the currently selected word.
@@ -3411,6 +3521,15 @@ impl App {
                         description: "Chapters to preprocess ahead".to_string(),
                         value: SettingsValue::Integer(reader.preprocess_ahead as i64),
                     },
+                    SettingsItem {
+                        key: "reader.translation_service".to_string(),
+                        label: "Translation service".to_string(),
+                        description: "Browser translation service for 'g' key".to_string(),
+                        value: SettingsValue::Choice(
+                            reader.translation_service.clone(),
+                            vec!["deepl".to_string(), "google".to_string()],
+                        ),
+                    },
                 ],
             },
             SettingsCategory {
@@ -3500,6 +3619,11 @@ impl App {
                     "reader.preprocess_ahead" => {
                         if let SettingsValue::Integer(v) = &item.value {
                             self.config.reader.preprocess_ahead = (*v).max(0).min(20) as usize;
+                        }
+                    }
+                    "reader.translation_service" => {
+                        if let SettingsValue::Choice(v, _) = &item.value {
+                            self.config.reader.translation_service = v.clone();
                         }
                     }
                     "srs.new_cards_per_day" => {

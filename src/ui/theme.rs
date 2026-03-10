@@ -352,6 +352,13 @@ impl Theme {
     /// Downgrade RGB colors to 256-color or 16-color palette based on terminal
     /// capabilities. Call this after loading the theme.
     pub fn apply_color_fallback(&mut self) {
+        // Windows Terminal, cmd.exe, and PowerShell on Windows 10+ all support
+        // truecolor via the virtual terminal sequences that crossterm enables.
+        // They don't set COLORTERM/TERM, so skip detection on Windows entirely.
+        if cfg!(target_os = "windows") {
+            return;
+        }
+
         // Check if the terminal advertises color support via COLORTERM
         let colorterm = std::env::var("COLORTERM").unwrap_or_default();
         let supports_truecolor = colorterm == "truecolor" || colorterm == "24bit";

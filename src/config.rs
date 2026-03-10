@@ -35,6 +35,9 @@ pub struct ReaderConfig {
     /// Number of chapters to keep preprocessed ahead of the reader.
     #[serde(default = "default_preprocess_ahead")]
     pub preprocess_ahead: usize,
+    /// Translation service to open in the browser: "deepl" or "google".
+    #[serde(default = "default_translation_service")]
+    pub translation_service: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +88,9 @@ fn default_true() -> bool {
 fn default_preprocess_ahead() -> usize {
     3
 }
+fn default_translation_service() -> String {
+    "deepl".into()
+}
 fn default_cloze_ratio() -> u32 {
     50
 }
@@ -111,6 +117,7 @@ impl Default for ReaderConfig {
             furigana: true,
             sentence_gaps: true,
             preprocess_ahead: default_preprocess_ahead(),
+            translation_service: default_translation_service(),
         }
     }
 }

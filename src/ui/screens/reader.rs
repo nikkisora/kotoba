@@ -121,7 +121,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         known_indicator,
         translation_indicator,
         Span::styled(
-            " ↑↓:sent ←→:word 1-5:status t:translate T:sent-trans m:expr ",
+            " ↑↓:sent ←→:word 1-5:status t:translate g:jisho G:browser m:expr ",
             Style::default().fg(t.muted),
         ),
     ]);
