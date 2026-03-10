@@ -20,7 +20,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
             scroll,
         } => {
             let area = centered_rect(60, 80, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let mut lines: Vec<Line> = Vec::new();
 
@@ -129,7 +129,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
             scroll,
         } => {
             let area = centered_rect(65, 85, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let mut lines: Vec<Line> = Vec::new();
 
@@ -260,7 +260,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::Help { scroll } => {
             let area = centered_rect(65, 85, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let heading = Style::default().fg(t.warning).add_modifier(Modifier::BOLD);
 
@@ -364,7 +364,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::NoteEditor { text, .. } => {
             let area = centered_rect(50, 30, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(Span::styled(
@@ -391,7 +391,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::QuitConfirm => {
             let area = centered_rect(40, 15, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(""),
@@ -415,7 +415,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::DeleteConfirm { title, .. } => {
             let area = centered_rect(50, 20, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(""),
@@ -443,7 +443,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::DeleteSourceConfirm { title, .. } => {
             let area = centered_rect(55, 25, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(""),
@@ -472,7 +472,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::ImportMenu => {
             let area = centered_rect(45, 30, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(""),
@@ -500,7 +500,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::UrlInput { text } => {
             let area = centered_rect(60, 20, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(""),
@@ -531,7 +531,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::FilePathInput { text } => {
             let area = centered_rect(60, 20, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(""),
@@ -562,7 +562,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::SyosetuInput { text } => {
             let area = centered_rect(60, 20, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(""),
@@ -597,7 +597,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
             gloss,
         } => {
             let area = centered_rect(55, 35, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let mut lines: Vec<Line> = Vec::new();
             lines.push(Line::from(""));
@@ -648,7 +648,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
             ..
         } => {
             let area = centered_rect(55, 30, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(""),
@@ -692,7 +692,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
             ..
         } => {
             let area = centered_rect(65, 40, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             // Truncate sentence for display
             let display_text: String = sentence_text.chars().take(80).collect();
@@ -746,7 +746,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::DeleteCardConfirm { card_id } => {
             let area = centered_rect(40, 15, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(""),
@@ -770,7 +770,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
 
         PopupState::SearchInput { text } => {
             let area = centered_rect(50, 15, frame.size());
-            frame.render_widget(Clear, padded_rect(area, frame.size()));
+            clear_area(frame, padded_rect(area, frame.size()), t.bg);
 
             let lines = vec![
                 Line::from(""),
@@ -799,6 +799,13 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
             frame.render_widget(paragraph, area);
         }
     }
+}
+
+/// Clear an area and fill it with the theme background color.
+fn clear_area(frame: &mut Frame, area: Rect, bg: Color) {
+    frame.render_widget(Clear, area);
+    let block = Block::default().style(Style::default().bg(bg));
+    frame.render_widget(block, area);
 }
 
 /// Expand a rect by 1 cell on each side to clear wide CJK characters that straddle the border.

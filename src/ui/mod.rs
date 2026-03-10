@@ -3,7 +3,8 @@ pub mod events;
 pub mod screens;
 pub mod theme;
 
-use ratatui::widgets::Clear;
+use ratatui::style::Style;
+use ratatui::widgets::{Block, Clear};
 use ratatui::Frame;
 
 use crate::app::{App, Screen};
@@ -12,6 +13,10 @@ use crate::app::{App, Screen};
 pub fn render(frame: &mut Frame, app: &mut App) {
     // Clear the entire frame first to prevent artifacts from previous screens.
     frame.render_widget(Clear, frame.size());
+
+    // Fill with theme base background and foreground so light themes work.
+    let base = Block::default().style(Style::default().bg(app.theme.bg).fg(app.theme.fg));
+    frame.render_widget(base, frame.size());
 
     match &app.screen.clone() {
         Screen::Home => screens::home::render(frame, app),
