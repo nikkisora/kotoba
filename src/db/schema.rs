@@ -317,6 +317,18 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
             ON vocabulary_sentences(vocabulary_id);
         "#,
     ),
+    (
+        20,
+        "Create daily_activity table for tracking daily reading and review activity",
+        r#"
+        CREATE TABLE IF NOT EXISTS daily_activity (
+            date TEXT PRIMARY KEY,
+            sentences_read INTEGER NOT NULL DEFAULT 0,
+            reviews_completed INTEGER NOT NULL DEFAULT 0,
+            words_learned INTEGER NOT NULL DEFAULT 0
+        );
+        "#,
+    ),
 ];
 
 /// Run all pending migrations.
@@ -367,6 +379,6 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 19);
+        assert_eq!(version, 20);
     }
 }

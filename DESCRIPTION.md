@@ -106,7 +106,7 @@ kotoba/
 ## Screens
 
 ### Home
-Dashboard showing the 15 most recently read texts with reading progress bars, K/L/N% word status breakdown, and SRS due card count. Quick actions: `l` Library, `r` Review, `i` Import, `c` Card Browser, `s` Settings. Toggle finished texts with `f`.
+Dashboard with three panels: a GitHub-style **activity heatmap** (26 weeks, color-coded by daily activity intensity), a **quick stats** panel (streak, known/learning words, reviews today, due cards, 7-day accuracy), and the **recently read** list (up to 15 texts with progress bars, K/L/N% vocab breakdown). Tab switches focus between heatmap and text list; arrow keys navigate the heatmap to inspect individual days. Quick actions: `l` Library, `r` Review, `i` Import, `c` Card Browser, `s` Settings. Toggle finished texts with `f`.
 
 ### Library
 Full list of all imported content — standalone texts and grouped multi-chapter sources (Syosetu, EPUB). Supports sorting (`s`: date desc/asc, title A-Z, completion %), filtering by source type (`f`), searching by title (`/`), and deletion (`d`). Enter opens text in Reader or source in ChapterSelect.
@@ -146,7 +146,8 @@ Two-panel settings editor with categories (Reader, SRS). Supports Bool toggles (
 
 | Command | Description |
 | --- | --- |
-| `kotoba run` | Launch the TUI |
+| `kotoba` | Launch the TUI (default when no subcommand given) |
+| `kotoba run` | Launch the TUI (explicit) |
 | `kotoba import <file>` | Import content (auto-detects: .txt, .srt, .ass, .ssa, .epub) |
 | `kotoba import --clipboard` | Import from system clipboard |
 | `kotoba import --url <URL>` | Import from a web URL |

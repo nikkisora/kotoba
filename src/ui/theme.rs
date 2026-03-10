@@ -47,6 +47,14 @@ pub struct Theme {
     pub review_vocab_l3_bg: Color,
     pub review_vocab_l4_bg: Color,
 
+    // ── Heatmap (activity calendar) ──
+    pub heatmap_empty: Color,  // No activity
+    pub heatmap_low: Color,    // Light activity (1-19 actions)
+    pub heatmap_mid: Color,    // Moderate activity (20-79 actions)
+    pub heatmap_high: Color,   // High activity (80-159 actions)
+    pub heatmap_max: Color,    // Intense activity (160+ actions)
+    pub heatmap_cursor: Color, // Selected day highlight
+
     // ── UI elements ──
     pub progress_bar: Color,
     pub stats_text: Color,
@@ -138,6 +146,13 @@ impl Theme {
             review_vocab_l3_bg: Color::Rgb(80, 70, 20),
             review_vocab_l4_bg: Color::Rgb(60, 55, 15),
 
+            heatmap_empty: Color::Rgb(45, 45, 65),
+            heatmap_low: Color::Rgb(14, 68, 41),
+            heatmap_mid: Color::Rgb(0, 109, 50),
+            heatmap_high: Color::Rgb(38, 166, 65),
+            heatmap_max: Color::Rgb(57, 211, 83),
+            heatmap_cursor: Color::Rgb(255, 255, 255),
+
             progress_bar: Color::Rgb(100, 180, 100),
             stats_text: Color::Rgb(100, 140, 180),
             status_msg_fg: Color::Black,
@@ -187,6 +202,13 @@ impl Theme {
             review_vocab_l2_bg: Color::Rgb(255, 248, 235),
             review_vocab_l3_bg: Color::Rgb(240, 248, 240),
             review_vocab_l4_bg: Color::Rgb(245, 245, 245),
+
+            heatmap_empty: Color::Rgb(230, 230, 230),
+            heatmap_low: Color::Rgb(155, 233, 168),
+            heatmap_mid: Color::Rgb(64, 196, 99),
+            heatmap_high: Color::Rgb(48, 161, 78),
+            heatmap_max: Color::Rgb(33, 110, 57),
+            heatmap_cursor: Color::Rgb(0, 0, 0),
 
             progress_bar: Color::Rgb(30, 130, 50),
             stats_text: gray50,
@@ -249,6 +271,13 @@ impl Theme {
             review_vocab_l3_bg: Color::Rgb(110, 100, 50),
             review_vocab_l4_bg: base01,
 
+            heatmap_empty: Color::Rgb(220, 215, 195),
+            heatmap_low: Color::Rgb(155, 200, 100),
+            heatmap_mid: Color::Rgb(100, 160, 30),
+            heatmap_high: Color::Rgb(133, 153, 0),
+            heatmap_max: Color::Rgb(80, 120, 0),
+            heatmap_cursor: base02,
+
             progress_bar: green,
             stats_text: blue,
             status_msg_fg: base3,
@@ -307,6 +336,13 @@ impl Theme {
             review_vocab_l2_bg: Color::Rgb(90, 65, 20),
             review_vocab_l3_bg: Color::Rgb(75, 60, 15),
             review_vocab_l4_bg: Color::Rgb(60, 50, 10),
+
+            heatmap_empty: Color::Rgb(60, 56, 54),
+            heatmap_low: Color::Rgb(90, 110, 60),
+            heatmap_mid: Color::Rgb(120, 140, 40),
+            heatmap_high: Color::Rgb(152, 151, 26),
+            heatmap_max: Color::Rgb(184, 187, 38),
+            heatmap_cursor: fg0,
 
             progress_bar: green,
             stats_text: blue,
@@ -409,6 +445,12 @@ impl Theme {
         self.review_vocab_l2_bg = f(self.review_vocab_l2_bg);
         self.review_vocab_l3_bg = f(self.review_vocab_l3_bg);
         self.review_vocab_l4_bg = f(self.review_vocab_l4_bg);
+        self.heatmap_empty = f(self.heatmap_empty);
+        self.heatmap_low = f(self.heatmap_low);
+        self.heatmap_mid = f(self.heatmap_mid);
+        self.heatmap_high = f(self.heatmap_high);
+        self.heatmap_max = f(self.heatmap_max);
+        self.heatmap_cursor = f(self.heatmap_cursor);
         self.progress_bar = f(self.progress_bar);
         self.stats_text = f(self.stats_text);
         self.status_msg_fg = f(self.status_msg_fg);
@@ -471,6 +513,12 @@ struct VocabOverrides {
 
 #[derive(Debug, Default, Deserialize)]
 struct UiOverrides {
+    heatmap_empty: Option<String>,
+    heatmap_low: Option<String>,
+    heatmap_mid: Option<String>,
+    heatmap_high: Option<String>,
+    heatmap_max: Option<String>,
+    heatmap_cursor: Option<String>,
     progress_bar: Option<String>,
     stats_text: Option<String>,
     status_msg_fg: Option<String>,
@@ -511,6 +559,12 @@ impl ThemeOverrides {
             apply_color(&vocab.ignored_fg, &mut theme.vocab_ignored_fg);
         }
         if let Some(ref ui) = self.ui {
+            apply_color(&ui.heatmap_empty, &mut theme.heatmap_empty);
+            apply_color(&ui.heatmap_low, &mut theme.heatmap_low);
+            apply_color(&ui.heatmap_mid, &mut theme.heatmap_mid);
+            apply_color(&ui.heatmap_high, &mut theme.heatmap_high);
+            apply_color(&ui.heatmap_max, &mut theme.heatmap_max);
+            apply_color(&ui.heatmap_cursor, &mut theme.heatmap_cursor);
             apply_color(&ui.progress_bar, &mut theme.progress_bar);
             apply_color(&ui.stats_text, &mut theme.stats_text);
             apply_color(&ui.status_msg_fg, &mut theme.status_msg_fg);

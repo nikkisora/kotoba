@@ -47,6 +47,39 @@ Everything below is **not yet implemented**. For a description of what the app c
 
 ---
 
+## Phase 5.5 — Home Screen Activity Dashboard ✅
+
+**Goal**: Enrich the home screen with an interactive activity heatmap and quick stats.
+
+### 5.5.1 Daily Activity Tracking
+- [x] New `daily_activity` table (migration 20): date, sentences_read, reviews_completed, words_learned
+- [x] Increment counters automatically: sentence advance in Reader, review completion, word status → Learning1
+
+### 5.5.2 Activity Queries
+- [x] `get_daily_activity(conn, days)` — activity records for heatmap grid
+- [x] `get_activity_streak(conn)` — consecutive days with any activity (reading or SRS)
+- [x] `get_vocabulary_summary(conn)` — total known/learning word counts
+- [x] `get_reviews_today(conn)` — reviews completed today
+- [x] `get_recent_accuracy(conn)` — 7-day review accuracy percentage
+
+### 5.5.3 Home Screen Redesign
+- [x] Layout: Activity heatmap (65%) + Quick Stats panel (35%) above the text list
+- [x] GitHub-style contribution heatmap: 26 weeks (~6 months), Mon-Sun rows
+  - 5 color intensity levels: empty, low (1-19), moderate (20-79), high (80-159), max (160+)
+  - Month labels along the top, day-of-week labels on the left
+  - Today highlighted with underline
+  - Legend with color scale
+- [x] Quick Stats panel: streak (with fire emoji), words known/learning, reviews today, due now, 7-day accuracy
+- [x] Two-panel focus system: Tab/BackTab switches between Heatmap and TextList
+  - Heatmap: arrow keys navigate cursor, selected day shows detailed breakdown (reviews/sentences/words)
+  - TextList: existing navigation (Up/Down, Enter to open, f to toggle finished)
+  - Active panel border highlighted with accent color
+- [x] Heatmap colors added to Theme struct: `heatmap_empty`, `heatmap_low`, `heatmap_mid`, `heatmap_high`, `heatmap_max`, `heatmap_cursor`
+  - All 4 built-in themes updated with appropriate heatmap colors
+  - Custom theme TOML overrides supported via `[ui]` section
+
+---
+
 ## Phase 6 — Stats Screen
 
 **Goal**: Visualize learning progress with terminal-based charts and metrics.

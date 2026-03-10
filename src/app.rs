@@ -402,6 +402,15 @@ impl ChapterSelectState {
     }
 }
 
+/// Focus area on the home screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeFocus {
+    /// Navigating the heatmap calendar.
+    Heatmap,
+    /// Navigating the text list.
+    TextList,
+}
+
 /// Home screen state.
 pub struct HomeState {
     pub recent_texts: Vec<models::Text>,
@@ -413,6 +422,24 @@ pub struct HomeState {
     pub due_card_counts: (usize, usize),
     /// Whether the JMdict dictionary has been imported.
     pub dict_loaded: bool,
+    /// Daily activity data for the heatmap (last ~6 months).
+    pub activity: Vec<models::DailyActivity>,
+    /// Current activity streak in days.
+    pub streak: usize,
+    /// Total known words.
+    pub words_known: usize,
+    /// Total learning words.
+    pub words_learning: usize,
+    /// Reviews completed today.
+    pub reviews_today: usize,
+    /// 7-day accuracy percentage.
+    pub accuracy_7d: u8,
+    /// Which panel has focus (heatmap or text list).
+    pub focus: HomeFocus,
+    /// Selected day index in the heatmap grid (0 = top-left cell).
+    pub heatmap_cursor: usize,
+    /// Total number of cells in the heatmap grid (for bounds).
+    pub heatmap_cells: usize,
 }
 
 /// Phase of the review card display.
@@ -982,11 +1009,21 @@ impl App {
             .unwrap_or(0)
             > 0;
 
+        // Activity data for the heatmap (last ~6 months = 182 days)
+        let activity = models::get_daily_activity(&conn, 182).unwrap_or_default();
+        let streak = models::get_activity_streak(&conn).unwrap_or(0);
+        let (words_known, words_learning) = models::get_vocabulary_summary(&conn).unwrap_or((0, 0));
+        let reviews_today = models::get_reviews_today(&conn).unwrap_or(0);
+        let accuracy_7d = models::get_recent_accuracy(&conn).unwrap_or(0);
+
         let prev = self.home_state.as_ref();
         let show_finished = prev.map(|s| s.show_finished).unwrap_or(false);
         let selected = prev
             .map(|s| s.selected.min(recent.len().saturating_sub(1)))
             .unwrap_or(0);
+        let focus = prev.map(|s| s.focus).unwrap_or(HomeFocus::TextList);
+        let heatmap_cursor = prev.map(|s| s.heatmap_cursor).unwrap_or(0);
+        let heatmap_cells = prev.map(|s| s.heatmap_cells).unwrap_or(0);
         self.home_state = Some(HomeState {
             recent_texts: recent,
             recent_stats: stats,
@@ -994,6 +1031,15 @@ impl App {
             show_finished,
             due_card_counts,
             dict_loaded,
+            activity,
+            streak,
+            words_known,
+            words_learning,
+            reviews_today,
+            accuracy_7d,
+            focus,
+            heatmap_cursor,
+            heatmap_cells,
         });
         Ok(())
     }
@@ -1335,6 +1381,11 @@ impl App {
                 // Log but don't fail — SRS is secondary to vocabulary tracking
                 self.set_message(format!("SRS card error: {}", e));
             }
+        }
+
+        // Track daily activity when a word enters Learning for the first time
+        if matches!(status, VocabularyStatus::Learning1) {
+            let _ = models::record_word_learned(&conn);
         }
 
         // Collect current sentence context for the vocabulary item
@@ -2041,6 +2092,13 @@ impl App {
         Ok(())
     }
 
+    /// Record a sentence read for daily activity tracking.
+    pub fn record_sentence_read(&self) {
+        if let Ok(conn) = self.open_db() {
+            let _ = models::record_sentence_read(&conn);
+        }
+    }
+
     /// Try to advance to the next chapter in the same source.
     /// Returns Ok(true) if we navigated to a new chapter, Ok(false) if there is no next chapter.
     pub fn advance_to_next_chapter(&mut self) -> Result<bool> {
@@ -2671,6 +2729,9 @@ impl App {
                 answer_correct,
             )?;
         }
+
+        // Track daily activity
+        let _ = models::record_review_completed(&conn);
 
         // Update session stats
         if let Some(ref mut state) = self.review_state {

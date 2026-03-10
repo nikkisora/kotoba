@@ -1565,3 +1565,229 @@ mod tests {
         assert_eq!(count, 2);
     }
 }
+
+// ─── Daily Activity Tracking ─────────────────────────────────────────
+
+/// A single day's activity record.
+#[derive(Debug, Clone)]
+pub struct DailyActivity {
+    pub date: String,
+    pub sentences_read: i64,
+    pub reviews_completed: i64,
+    pub words_learned: i64,
+}
+
+impl DailyActivity {
+    /// Total activity score for this day.
+    pub fn total(&self) -> i64 {
+        self.sentences_read + self.reviews_completed + self.words_learned
+    }
+}
+
+/// Increment today's sentences_read counter.
+pub fn record_sentence_read(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT INTO daily_activity (date, sentences_read) VALUES (date('now'), 1)
+         ON CONFLICT(date) DO UPDATE SET sentences_read = sentences_read + 1",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Increment today's reviews_completed counter.
+pub fn record_review_completed(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT INTO daily_activity (date, reviews_completed) VALUES (date('now'), 1)
+         ON CONFLICT(date) DO UPDATE SET reviews_completed = reviews_completed + 1",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Increment today's words_learned counter.
+pub fn record_word_learned(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT INTO daily_activity (date, words_learned) VALUES (date('now'), 1)
+         ON CONFLICT(date) DO UPDATE SET words_learned = words_learned + 1",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Get daily activity for the last N days (including days with zero activity).
+pub fn get_daily_activity(conn: &Connection, days: usize) -> Result<Vec<DailyActivity>> {
+    let mut stmt = conn.prepare(
+        "SELECT date, sentences_read, reviews_completed, words_learned
+         FROM daily_activity
+         WHERE date >= date('now', ?1)
+         ORDER BY date ASC",
+    )?;
+    let offset = format!("-{} days", days);
+    let rows = stmt.query_map(params![offset], |row| {
+        Ok(DailyActivity {
+            date: row.get(0)?,
+            sentences_read: row.get(1)?,
+            reviews_completed: row.get(2)?,
+            words_learned: row.get(3)?,
+        })
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Get the current activity streak (consecutive days with any activity, including today).
+pub fn get_activity_streak(conn: &Connection) -> Result<usize> {
+    // Get all activity dates in reverse order
+    let mut stmt = conn.prepare(
+        "SELECT date FROM daily_activity
+         WHERE sentences_read + reviews_completed + words_learned > 0
+         ORDER BY date DESC",
+    )?;
+    let dates: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if dates.is_empty() {
+        return Ok(0);
+    }
+
+    // Parse today's date
+    let today: String = conn.query_row("SELECT date('now')", [], |row| row.get(0))?;
+
+    let mut streak = 0usize;
+    let mut expected = parse_date_str(&today);
+
+    for date_str in &dates {
+        let d = parse_date_str(date_str);
+        if d == expected {
+            streak += 1;
+            expected = prev_day(expected);
+        } else if d < expected {
+            // Gap found — if we haven't started counting yet (today has no activity),
+            // check if yesterday matches
+            if streak == 0 {
+                let yesterday = prev_day(parse_date_str(&today));
+                if d == yesterday {
+                    streak += 1;
+                    expected = prev_day(yesterday);
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    Ok(streak)
+}
+
+/// Get total vocabulary counts by status.
+pub fn get_vocabulary_summary(conn: &Connection) -> Result<(usize, usize)> {
+    let known: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM vocabulary WHERE status = 5",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let learning: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM vocabulary WHERE status BETWEEN 1 AND 4",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    Ok((known, learning))
+}
+
+/// Get the 7-day review accuracy rate (percentage).
+pub fn get_recent_accuracy(conn: &Connection) -> Result<u8> {
+    let total: f64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM srs_reviews WHERE reviewed_at >= datetime('now', '-7 days')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+    if total == 0.0 {
+        return Ok(0);
+    }
+    let correct: f64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM srs_reviews WHERE reviewed_at >= datetime('now', '-7 days') AND answer_correct = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+    Ok((correct / total * 100.0).round() as u8)
+}
+
+/// Get number of reviews completed today.
+pub fn get_reviews_today(conn: &Connection) -> Result<usize> {
+    let count: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM srs_reviews WHERE date(reviewed_at) = date('now')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    Ok(count)
+}
+
+// ── Date helpers ──
+
+/// Simple date representation for streak calculation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SimpleDate {
+    year: i32,
+    month: u32,
+    day: u32,
+}
+
+fn parse_date_str(s: &str) -> SimpleDate {
+    let parts: Vec<&str> = s.split('-').collect();
+    SimpleDate {
+        year: parts.first().and_then(|p| p.parse().ok()).unwrap_or(2000),
+        month: parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(1),
+        day: parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(1),
+    }
+}
+
+fn prev_day(d: SimpleDate) -> SimpleDate {
+    if d.day > 1 {
+        SimpleDate {
+            day: d.day - 1,
+            ..d
+        }
+    } else if d.month > 1 {
+        let prev_month = d.month - 1;
+        let days = days_in_month(d.year, prev_month);
+        SimpleDate {
+            month: prev_month,
+            day: days,
+            ..d
+        }
+    } else {
+        SimpleDate {
+            year: d.year - 1,
+            month: 12,
+            day: 31,
+        }
+    }
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}

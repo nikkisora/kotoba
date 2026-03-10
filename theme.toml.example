@@ -47,6 +47,12 @@ ignored_fg = "#444b6a"       # Ignored/skipped words
 
 # ── UI element colors ──
 [ui]
+heatmap_empty       = "#2d2d41"  # Activity heatmap: no activity
+heatmap_low         = "#0e4429"  # Activity heatmap: light (1-19 actions)
+heatmap_mid         = "#006d32"  # Activity heatmap: moderate (20-79 actions)
+heatmap_high        = "#26a641"  # Activity heatmap: high (80-159 actions)
+heatmap_max         = "#39d353"  # Activity heatmap: intense (160+ actions)
+heatmap_cursor      = "#ffffff"  # Activity heatmap: selected day cursor
 progress_bar        = "#3d59a1"
 stats_text          = "#565f89"
 status_msg_fg       = "#1a1b26"

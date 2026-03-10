@@ -19,7 +19,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     frame.render_widget(base, frame.size());
 
     match &app.screen.clone() {
-        Screen::Home => screens::home::render(frame, app),
+        Screen::Home => screens::home::render(frame, &mut *app),
         Screen::Library => screens::library::render(frame, app),
         Screen::ChapterSelect { .. } => screens::chapter_select::render(frame, app),
         Screen::Reader => screens::reader::render(frame, app),

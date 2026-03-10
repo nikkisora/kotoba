@@ -33,9 +33,9 @@ use ui::events::{Event, EventLoop};
                   It combines an immersive reader with SRS flashcard review,\n\
                   vocabulary tracking, and dictionary lookup — all in the terminal.\n\n\
                   Get started:\n  \
+                   kotoba                 Launch the interactive TUI\n  \
                   kotoba setup-dict      Download the JMdict dictionary\n  \
                   kotoba import <file>   Import a text (.txt, .epub, .srt, .ass)\n  \
-                  kotoba run             Launch the interactive TUI\n  \
                   kotoba config          Show current configuration"
 )]
 struct Cli {
@@ -44,7 +44,7 @@ struct Cli {
     config: Option<PathBuf>,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -159,7 +159,7 @@ fn main() -> Result<()> {
     let conn = db::connection::open_or_create(&cfg.db_path())?;
     db::schema::run_migrations(&conn)?;
 
-    match cli.command {
+    match cli.command.unwrap_or(Commands::Run) {
         Commands::Import {
             file,
             clipboard,
@@ -454,16 +454,23 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             }
             return;
         }
-        KeyCode::Tab => {
-            // On Settings/CardBrowser screens, Tab switches categories instead
+        KeyCode::Tab | KeyCode::BackTab => {
+            // On Settings/CardBrowser/Home screens, Tab switches panels instead
             // of triggering the global reader toggle.
-            if app.screen == Screen::Settings || app.screen == Screen::CardBrowser {
-                // Let the screen-specific handler deal with Tab
+            if app.screen == Screen::Settings
+                || app.screen == Screen::CardBrowser
+                || app.screen == Screen::Home
+            {
                 match &app.screen.clone() {
                     Screen::Settings => handle_settings_key(app, key),
                     Screen::CardBrowser => handle_card_browser_key(app, key),
+                    Screen::Home => handle_home_key(app, key),
                     _ => {}
                 }
+                return;
+            }
+            // BackTab shouldn't trigger reader toggle
+            if key.code == KeyCode::BackTab {
                 return;
             }
             // Tab toggles between Reader <-> non-Reader
@@ -1440,6 +1447,93 @@ fn home_filtered_texts(home: &app::HomeState) -> Vec<usize> {
 }
 
 fn handle_home_key(app: &mut App, key: KeyEvent) {
+    use app::HomeFocus;
+
+    // Tab switches between heatmap and text list
+    if key.code == KeyCode::Tab || key.code == KeyCode::BackTab {
+        if let Some(ref mut home) = app.home_state {
+            home.focus = match home.focus {
+                HomeFocus::Heatmap => HomeFocus::TextList,
+                HomeFocus::TextList => HomeFocus::Heatmap,
+            };
+        }
+        return;
+    }
+
+    // Delegate to the focused panel
+    let focus = app
+        .home_state
+        .as_ref()
+        .map(|h| h.focus)
+        .unwrap_or(HomeFocus::TextList);
+
+    match focus {
+        HomeFocus::Heatmap => handle_home_heatmap_key(app, key),
+        HomeFocus::TextList => handle_home_textlist_key(app, key),
+    }
+}
+
+fn handle_home_heatmap_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Left | KeyCode::Char('h') => {
+            if let Some(ref mut home) = app.home_state {
+                // Move cursor left (previous day = previous column)
+                let weeks = home.heatmap_cells / 7;
+                if weeks == 0 {
+                    return;
+                }
+                let row = home.heatmap_cursor / weeks;
+                let col = home.heatmap_cursor % weeks;
+                if col > 0 {
+                    home.heatmap_cursor = row * weeks + col - 1;
+                }
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if let Some(ref mut home) = app.home_state {
+                let weeks = home.heatmap_cells / 7;
+                if weeks == 0 {
+                    return;
+                }
+                let row = home.heatmap_cursor / weeks;
+                let col = home.heatmap_cursor % weeks;
+                if col + 1 < weeks {
+                    home.heatmap_cursor = row * weeks + col + 1;
+                }
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut home) = app.home_state {
+                let weeks = home.heatmap_cells / 7;
+                if weeks == 0 {
+                    return;
+                }
+                let row = home.heatmap_cursor / weeks;
+                if row > 0 {
+                    let col = home.heatmap_cursor % weeks;
+                    home.heatmap_cursor = (row - 1) * weeks + col;
+                }
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut home) = app.home_state {
+                let weeks = home.heatmap_cells / 7;
+                if weeks == 0 {
+                    return;
+                }
+                let row = home.heatmap_cursor / weeks;
+                let col = home.heatmap_cursor % weeks;
+                if row + 1 < 7 {
+                    home.heatmap_cursor = (row + 1) * weeks + col;
+                }
+            }
+        }
+        // Pass through common shortcuts
+        _ => handle_home_common_key(app, key),
+    }
+}
+
+fn handle_home_textlist_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut home) = app.home_state {
@@ -1471,11 +1565,16 @@ fn handle_home_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('f') => {
             if let Some(ref mut home) = app.home_state {
                 home.show_finished = !home.show_finished;
-                // Clamp selection to new filtered list length
                 let filtered = home_filtered_texts(home);
                 home.selected = home.selected.min(filtered.len().saturating_sub(1));
             }
         }
+        _ => handle_home_common_key(app, key),
+    }
+}
+
+fn handle_home_common_key(app: &mut App, key: KeyEvent) {
+    match key.code {
         KeyCode::Char('l') => {
             app.screen = Screen::Library;
             if let Err(e) = app.refresh_library() {
@@ -2081,6 +2180,9 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                             app.set_message("End of text. Press Esc to return.");
                         }
                     }
+                } else {
+                    // Record the sentence advancement for daily activity
+                    app.record_sentence_read();
                 }
             }
             if !matches!(departing, Some((_, true))) {
