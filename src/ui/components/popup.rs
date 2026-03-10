@@ -265,10 +265,14 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
             let heading = Style::default().fg(t.warning).add_modifier(Modifier::BOLD);
 
             let lines = vec![
-                Line::from(Span::styled(
-                    "Keybindings",
-                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-                )),
+                Line::from(vec![
+                    Span::styled(
+                        "Keybindings",
+                        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled("↑/↓ scroll • Esc/? close", Style::default().fg(t.muted)),
+                ]),
                 Line::from(""),
                 // ── Global ──
                 Line::from(Span::styled("Global:", heading)),
@@ -278,7 +282,10 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
                 Line::from(""),
                 // ── Home ──
                 Line::from(Span::styled("Home:", heading)),
-                Line::from("  Up/k Down/j  Navigate recent texts"),
+                Line::from("  Tab          Switch focus (heatmap / text list)"),
+                Line::from("  Up/k Down/j  Navigate (texts or heatmap rows)"),
+                Line::from("  Left/h       Previous heatmap day"),
+                Line::from("  Right/l      Next heatmap day"),
                 Line::from("  Enter        Open selected text in Reader"),
                 Line::from("  l            Go to Library"),
                 Line::from("  r            Go to Review"),
@@ -352,11 +359,6 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
                 Line::from("  f            Import from file"),
                 Line::from("  s            Import from Syosetu"),
                 Line::from("  Esc          Cancel"),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "↑/↓ to scroll • Esc or ? to close",
-                    Style::default().fg(t.muted),
-                )),
             ];
 
             let block = Block::default()
