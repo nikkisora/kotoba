@@ -8,6 +8,10 @@ Built with Rust, [Ratatui](https://ratatui.rs), SQLite, and the
 [lindera](https://github.com/lindera/lindera) morphological analyzer with the
 UniDic dictionary.
 
+<p align="center">
+  <img src="data/reader.png" alt="kotoba" width="100%">
+</p>
+
 ## Features
 
 - **Immersive reader** -- sentence-by-sentence reading with furigana, color-coded
