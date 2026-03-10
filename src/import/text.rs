@@ -102,7 +102,7 @@ fn import_text_inner(
     let paragraphs = tokenizer::split_paragraphs(content);
     let mut total_tokens = 0usize;
     let mut new_vocab = 0usize;
-    let mut para_count = 0usize;
+    let mut _para_count = 0usize;
 
     if let Some(pb) = progress {
         pb.set_length(paragraphs.len() as u64);
@@ -111,7 +111,7 @@ fn import_text_inner(
 
     for (para_idx, para_text) in paragraphs.iter().enumerate() {
         let para_id = models::insert_paragraph(conn, text_id, para_idx as i32, para_text)?;
-        para_count += 1;
+        _para_count += 1;
 
         // Split paragraph into sentences and tokenize each
         let sentences = tokenizer::split_sentences(para_text);
@@ -223,6 +223,7 @@ pub struct PreTokenizedSentence {
 /// Phase 1: Tokenize text in memory without any DB access.
 /// Returns pre-tokenized data that can be written to DB later.
 /// This is safe to call from multiple threads simultaneously.
+#[allow(dead_code)]
 pub fn pretokenize_text(content: &str) -> Result<Vec<PreTokenizedParagraph>> {
     pretokenize_text_with_progress(content, &|_, _| {})
 }

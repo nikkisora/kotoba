@@ -104,6 +104,7 @@ pub enum PopupState {
 
 /// A token as displayed in the reader.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TokenDisplay {
     pub surface: String,
     pub base_form: String,
@@ -138,6 +139,7 @@ impl TokenDisplay {
 
 /// A multi-word expression match detected in a sentence.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MweMatch {
     /// First token index in the sentence.
     pub start: usize,
@@ -153,6 +155,7 @@ pub struct MweMatch {
 
 /// Data for a single sentence in the reader.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SentenceData {
     pub paragraph_idx: usize,
     pub start_token: usize,
@@ -163,6 +166,7 @@ pub struct SentenceData {
 
 /// Data for a paragraph in the reader.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ParagraphData {
     pub id: i64,
     pub position: i32,
@@ -180,6 +184,7 @@ pub struct AutopromotionBatch {
 }
 
 /// State for the reader screen.
+#[allow(dead_code)]
 pub struct ReaderState {
     pub text_id: i64,
     pub text_title: String,
@@ -365,6 +370,7 @@ impl ChapterSelectState {
     }
 
     /// Index within the current page.
+    #[allow(dead_code)]
     pub fn page_selected(&self) -> usize {
         self.selected.saturating_sub(self.page_start)
     }
@@ -573,6 +579,7 @@ pub struct CardBrowserState {
 
 /// A setting value type.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum SettingsValue {
     Bool(bool),
     Integer(i64),
@@ -1254,6 +1261,7 @@ impl App {
     }
 
     /// Refresh token display after vocabulary changes.
+    #[allow(dead_code)]
     pub fn refresh_reader_display(&mut self) -> Result<()> {
         if let Some(ref mut state) = self.reader_state {
             state.sentences = build_sentences(

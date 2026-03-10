@@ -55,6 +55,7 @@ pub fn import_clipboard_quiet(conn: &Connection) -> Result<(i64, String)> {
 }
 
 /// Get a preview of the clipboard content without importing.
+#[allow(dead_code)]
 pub fn get_clipboard_preview() -> Result<(String, usize)> {
     let mut clipboard = arboard::Clipboard::new().context("Failed to access clipboard")?;
 

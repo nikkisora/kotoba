@@ -7,6 +7,7 @@ use crate::import::background::ImportEvent;
 
 /// Application events.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Event {
     /// A key was pressed.
     Key(KeyEvent),

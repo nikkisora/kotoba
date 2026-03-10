@@ -13,6 +13,7 @@ use crate::db::{connection, models};
 
 /// Events sent from background workers to the TUI event loop.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum ImportEvent {
     /// A chapter started preprocessing.
     Started {
@@ -245,11 +246,13 @@ impl BackgroundImporter {
     }
 
     /// Check if a chapter is currently being preprocessed.
+    #[allow(dead_code)]
     pub fn is_in_flight(&self, chapter_id: i64) -> bool {
         self.in_flight.lock().unwrap().contains(&chapter_id)
     }
 
     /// Check if a chapter is in the queue (waiting to start).
+    #[allow(dead_code)]
     pub fn is_queued(&self, chapter_id: i64) -> bool {
         self.task_queue
             .lock()
@@ -537,6 +540,7 @@ fn run_import_task(
 
 /// Fetch novel info incrementally, page by page. Saves each page to DB and
 /// sends `ChaptersPageLoaded` events so the UI can update as chapters arrive.
+#[allow(unused_assignments)]
 fn fetch_novel_info_blocking(
     ncode: &str,
     db_path: &PathBuf,

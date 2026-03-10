@@ -359,6 +359,7 @@ pub fn fetch_chapter_content(ncode: &str, chapter: usize) -> Result<(String, Str
 }
 
 /// Import a chapter quietly (for TUI use).
+#[allow(dead_code)]
 pub fn import_chapter_quiet(
     ncode: &str,
     chapter: usize,
@@ -396,6 +397,7 @@ pub fn import_chapter_quiet(
 }
 
 /// Store novel metadata in the web_sources table.
+#[allow(dead_code)]
 pub fn save_novel_metadata(novel: &SyosetuNovel, conn: &Connection) -> Result<i64> {
     let metadata = serde_json::to_string(novel)?;
     let ws_id = models::upsert_web_source(conn, "syosetu", &novel.ncode, &novel.title, &metadata)?;

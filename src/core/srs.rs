@@ -23,6 +23,7 @@ pub enum Rating {
 }
 
 impl Rating {
+    #[allow(dead_code)]
     pub fn from_i32(v: i32) -> Option<Self> {
         match v {
             1 => Some(Rating::Again),
@@ -196,6 +197,7 @@ impl SrsEngine {
     }
 
     /// Retire a single card.
+    #[allow(dead_code)]
     pub fn retire_card(&self, conn: &Connection, card_id: i64) -> Result<()> {
         models::retire_srs_card(conn, card_id)?;
         Ok(())

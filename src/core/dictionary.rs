@@ -6,7 +6,6 @@ use quick_xml::Reader;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::Path;
 
 /// A sense (meaning) of a dictionary entry.
@@ -145,6 +144,7 @@ fn parse_dtd_entities(content: &str) -> HashMap<String, String> {
 }
 
 /// Import JMdict XML file into the database.
+#[allow(unused_assignments)]
 pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
     // ~200k entries typical for JMdict_e
     let estimated_entries: u64 = 200_000;

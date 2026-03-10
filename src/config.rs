@@ -156,6 +156,7 @@ impl AppConfig {
     }
 
     /// Resolved JMdict path — uses config override or defaults to XDG data dir.
+    #[allow(dead_code)]
     pub fn jmdict_path(&self) -> PathBuf {
         self.general
             .jmdict_path
