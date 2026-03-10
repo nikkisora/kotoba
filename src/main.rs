@@ -478,22 +478,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             // Tab toggles between Reader <-> non-Reader
             if app.screen == Screen::Reader {
                 // Go back to previous screen
-                let _ = app.save_reading_progress();
-                let target = app.previous_screen.take().unwrap_or(Screen::Home);
-                app.screen = target.clone();
-                match &target {
-                    Screen::Library => {
-                        let _ = app.refresh_library();
-                    }
-                    Screen::Home => {
-                        let _ = app.refresh_home();
-                    }
-                    Screen::ChapterSelect { source_id } => {
-                        let sid = *source_id;
-                        let _ = app.load_chapter_select(sid);
-                    }
-                    _ => {}
-                }
+                let _ = app.back_from_reader();
             } else {
                 // From any non-Reader screen: open most recently read text
                 let conn = match app.open_db() {
@@ -844,14 +829,7 @@ fn handle_card_browser_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Esc => {
             app.card_browser_state = None;
-            let target = app.previous_screen.take().unwrap_or(Screen::Home);
-            app.screen = target.clone();
-            match target {
-                Screen::Home => {
-                    let _ = app.refresh_home();
-                }
-                _ => {}
-            }
+            app.navigate_back();
         }
         _ => {}
     }
@@ -1023,14 +1001,7 @@ fn handle_settings_key(app: &mut App, key: KeyEvent) {
                 }
             }
             app.settings_state = None;
-            let target = app.previous_screen.take().unwrap_or(Screen::Home);
-            app.screen = target.clone();
-            match target {
-                Screen::Home => {
-                    let _ = app.refresh_home();
-                }
-                _ => {}
-            }
+            app.navigate_back();
         }
         _ => {}
     }
@@ -1674,14 +1645,7 @@ fn handle_stats_key(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Esc => {
-            let target = app.previous_screen.take().unwrap_or(Screen::Home);
-            app.screen = target.clone();
-            match &target {
-                Screen::Home => {
-                    let _ = app.refresh_home();
-                }
-                _ => {}
-            }
+            app.navigate_back();
         }
         _ => {}
     }
@@ -1997,17 +1961,7 @@ fn handle_review_key(app: &mut App, key: KeyEvent) {
             }
             KeyCode::Esc => {
                 app.review_state = None;
-                let target = app.previous_screen.take().unwrap_or(Screen::Home);
-                app.screen = target.clone();
-                match target {
-                    Screen::Home => {
-                        let _ = app.refresh_home();
-                    }
-                    Screen::Library => {
-                        let _ = app.refresh_library();
-                    }
-                    _ => {}
-                }
+                app.navigate_back();
             }
             _ => {}
         },
@@ -2048,17 +2002,7 @@ fn handle_review_key(app: &mut App, key: KeyEvent) {
             }
             KeyCode::Esc => {
                 app.review_state = None;
-                let target = app.previous_screen.take().unwrap_or(Screen::Home);
-                app.screen = target.clone();
-                match target {
-                    Screen::Home => {
-                        let _ = app.refresh_home();
-                    }
-                    Screen::Library => {
-                        let _ = app.refresh_library();
-                    }
-                    _ => {}
-                }
+                app.navigate_back();
             }
             KeyCode::Left | KeyCode::Char('h') => {
                 if let Some(ref mut state) = app.review_state {
@@ -2129,17 +2073,7 @@ fn handle_review_key(app: &mut App, key: KeyEvent) {
             }
             KeyCode::Esc => {
                 app.review_state = None;
-                let target = app.previous_screen.take().unwrap_or(Screen::Home);
-                app.screen = target.clone();
-                match target {
-                    Screen::Home => {
-                        let _ = app.refresh_home();
-                    }
-                    Screen::Library => {
-                        let _ = app.refresh_library();
-                    }
-                    _ => {}
-                }
+                app.navigate_back();
             }
             KeyCode::Left | KeyCode::Char('h') => {
                 if let Some(ref mut state) = app.review_state {
@@ -2185,17 +2119,7 @@ fn handle_review_key(app: &mut App, key: KeyEvent) {
         ReviewPhase::SessionSummary => match key.code {
             KeyCode::Enter | KeyCode::Esc => {
                 app.review_state = None;
-                let target = app.previous_screen.take().unwrap_or(Screen::Home);
-                app.screen = target.clone();
-                match target {
-                    Screen::Home => {
-                        let _ = app.refresh_home();
-                    }
-                    Screen::Library => {
-                        let _ = app.refresh_library();
-                    }
-                    _ => {}
-                }
+                app.navigate_back();
             }
             KeyCode::Char('r') => {
                 // Continue with more reviews

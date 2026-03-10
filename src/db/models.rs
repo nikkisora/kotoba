@@ -381,6 +381,20 @@ pub fn update_vocabulary_status(
     Ok(())
 }
 
+/// Load all vocabulary entries into a HashMap keyed by (base_form, reading).
+/// Used by the reader and review screens for fast status lookups.
+pub fn load_vocabulary_cache(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<(String, String), Vocabulary>> {
+    let mut stmt = conn.prepare("SELECT * FROM vocabulary")?;
+    let rows = stmt.query_map([], Vocabulary::from_row)?;
+    let mut cache = std::collections::HashMap::new();
+    for v in rows.flatten() {
+        cache.insert((v.base_form.clone(), v.reading.clone()), v);
+    }
+    Ok(cache)
+}
+
 pub fn list_vocabulary_by_status(
     conn: &Connection,
     status: VocabularyStatus,

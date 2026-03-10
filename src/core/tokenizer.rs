@@ -28,7 +28,7 @@ impl TokenInfo {
 }
 
 /// Check if a string is purely numeric (digits, decimal points, commas).
-fn is_numeric(s: &str) -> bool {
+pub fn is_numeric(s: &str) -> bool {
     let trimmed = s.trim();
     !trimmed.is_empty()
         && trimmed.chars().all(|c| {
@@ -50,7 +50,7 @@ fn is_numeric(s: &str) -> bool {
 }
 
 /// Check if a string contains only ASCII characters (English text, punctuation, etc.).
-fn is_ascii_only(s: &str) -> bool {
+pub fn is_ascii_only(s: &str) -> bool {
     let trimmed = s.trim();
     !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii())
 }

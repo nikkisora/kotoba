@@ -1278,16 +1278,7 @@ impl App {
         }
 
         // Build vocabulary cache
-        let mut vocabulary_cache = HashMap::new();
-        {
-            let mut stmt = conn.prepare("SELECT * FROM vocabulary")?;
-            let rows = stmt.query_map([], Vocabulary::from_row)?;
-            for row in rows {
-                if let Ok(v) = row {
-                    vocabulary_cache.insert((v.base_form.clone(), v.reading.clone()), v);
-                }
-            }
-        }
+        let vocabulary_cache = models::load_vocabulary_cache(&conn)?;
 
         // Build gloss cache: batch-lookup all unique base_forms at once
         let mut gloss_cache = HashMap::new();
@@ -2004,21 +1995,19 @@ impl App {
     /// Reload just the chapter list data from DB without triggering
     /// auto-refresh or preprocessing. Used during incremental page loading
     /// to avoid spawning duplicate background threads.
-    fn refresh_chapter_list(&mut self, source_id: i64) -> Result<()> {
-        let conn = self.open_db()?;
-        let source = models::get_web_source_by_id(&conn, source_id)?
-            .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
-        let chapters = models::list_chapters_by_source(&conn, source_id)?;
-        let (total, imported, skipped) = models::get_source_chapter_counts(&conn, source_id)?;
-
-        // Build reading state map for chapters with text_ids
-        let mut chapter_read_states = HashMap::new();
-        for ch in &chapters {
+    /// Build a reading-state map for a list of chapters by looking up each
+    /// chapter's text progress in the database.
+    fn build_chapter_read_states(
+        conn: &Connection,
+        chapters: &[models::WebSourceChapter],
+    ) -> Result<HashMap<i64, ChapterReadState>> {
+        let mut states = HashMap::new();
+        for ch in chapters {
             if ch.is_skipped {
                 continue;
             }
             if let Some(text_id) = ch.text_id {
-                let text = models::get_text_by_id(&conn, text_id)?;
+                let text = models::get_text_by_id(conn, text_id)?;
                 let state = match text {
                     Some(t) => {
                         if t.total_sentences == 0 {
@@ -2033,22 +2022,34 @@ impl App {
                     }
                     None => ChapterReadState::NotImported,
                 };
-                chapter_read_states.insert(ch.id, state);
+                states.insert(ch.id, state);
             } else {
-                chapter_read_states.insert(ch.id, ChapterReadState::NotImported);
+                states.insert(ch.id, ChapterReadState::NotImported);
             }
         }
+        Ok(states)
+    }
 
+    /// Build a `ChapterSelectState` from the given source data, reusing the
+    /// current selection index when the source matches.
+    fn build_chapter_select_state(
+        &self,
+        source: models::WebSource,
+        chapters: Vec<models::WebSourceChapter>,
+        total: usize,
+        imported: usize,
+        skipped: usize,
+        chapter_read_states: HashMap<i64, ChapterReadState>,
+    ) -> ChapterSelectState {
         let page_size = chapter_page_size_for_terminal();
         let selected = self
             .chapter_select_state
             .as_ref()
-            .filter(|s| s.source.id == source_id)
+            .filter(|s| s.source.id == source.id)
             .map(|s| s.selected.min(chapters.len().saturating_sub(1)))
             .unwrap_or(0);
         let page_start = (selected / page_size) * page_size;
-
-        self.chapter_select_state = Some(ChapterSelectState {
+        ChapterSelectState {
             source,
             chapters,
             selected,
@@ -2059,7 +2060,25 @@ impl App {
             total_skipped: skipped,
             loading: false,
             chapter_read_states,
-        });
+        }
+    }
+
+    fn refresh_chapter_list(&mut self, source_id: i64) -> Result<()> {
+        let conn = self.open_db()?;
+        let source = models::get_web_source_by_id(&conn, source_id)?
+            .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
+        let chapters = models::list_chapters_by_source(&conn, source_id)?;
+        let (total, imported, skipped) = models::get_source_chapter_counts(&conn, source_id)?;
+        let chapter_read_states = Self::build_chapter_read_states(&conn, &chapters)?;
+
+        self.chapter_select_state = Some(self.build_chapter_select_state(
+            source,
+            chapters,
+            total,
+            imported,
+            skipped,
+            chapter_read_states,
+        ));
         self.screen = Screen::ChapterSelect { source_id };
         Ok(())
     }
@@ -2071,62 +2090,20 @@ impl App {
             .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
         let chapters = models::list_chapters_by_source(&conn, source_id)?;
         let (total, imported, skipped) = models::get_source_chapter_counts(&conn, source_id)?;
-
-        // Build reading state map for chapters with text_ids
-        let mut chapter_read_states = HashMap::new();
-        for ch in &chapters {
-            if ch.is_skipped {
-                continue; // Skipped state is handled separately
-            }
-            if let Some(text_id) = ch.text_id {
-                // Look up reading progress for this text
-                let text = models::get_text_by_id(&conn, text_id)?;
-                let state = match text {
-                    Some(t) => {
-                        if t.total_sentences == 0 {
-                            ChapterReadState::Unread
-                        } else if t.last_sentence_index >= t.total_sentences - 1 {
-                            ChapterReadState::Finished
-                        } else if t.last_sentence_index > 0 {
-                            ChapterReadState::InProgress
-                        } else {
-                            ChapterReadState::Unread
-                        }
-                    }
-                    None => ChapterReadState::NotImported,
-                };
-                chapter_read_states.insert(ch.id, state);
-            } else {
-                chapter_read_states.insert(ch.id, ChapterReadState::NotImported);
-            }
-        }
-
-        let page_size = chapter_page_size_for_terminal();
-        let selected = self
-            .chapter_select_state
-            .as_ref()
-            .filter(|s| s.source.id == source_id)
-            .map(|s| s.selected.min(chapters.len().saturating_sub(1)))
-            .unwrap_or(0);
-        // Approximate page_start: snap to a page boundary
-        let page_start = (selected / page_size) * page_size;
+        let chapter_read_states = Self::build_chapter_read_states(&conn, &chapters)?;
 
         let is_syosetu = source.source_type == "syosetu";
         let ncode = source.external_id.clone();
         let chapter_count = chapters.len();
 
-        self.chapter_select_state = Some(ChapterSelectState {
+        self.chapter_select_state = Some(self.build_chapter_select_state(
             source,
             chapters,
-            selected,
-            page_start,
-            page_size,
-            total_chapters: total,
-            total_imported: imported,
-            total_skipped: skipped,
-            loading: false,
+            total,
+            imported,
+            skipped,
             chapter_read_states,
-        });
+        ));
         self.screen = Screen::ChapterSelect { source_id };
 
         // Start eager preprocessing
@@ -2246,21 +2223,27 @@ impl App {
     /// Go back from reader to the previous screen, saving progress.
     pub fn back_from_reader(&mut self) -> Result<()> {
         let _ = self.save_reading_progress();
+        self.navigate_back();
+        Ok(())
+    }
+
+    /// Navigate back to the previous screen, refreshing data as needed.
+    /// This is the general-purpose "go back" used by most Esc handlers.
+    pub fn navigate_back(&mut self) {
         let target = self.previous_screen.take().unwrap_or(Screen::Home);
         self.screen = target.clone();
         match target {
-            Screen::Library => {
-                let _ = self.refresh_library();
-            }
             Screen::Home => {
                 let _ = self.refresh_home();
+            }
+            Screen::Library => {
+                let _ = self.refresh_library();
             }
             Screen::ChapterSelect { source_id } => {
                 let _ = self.load_chapter_select(source_id);
             }
             _ => {}
         }
-        Ok(())
     }
 
     /// Search the library by title.
@@ -2444,16 +2427,7 @@ impl App {
         let due_cards = srs.get_due_cards(&conn, limit, self.config.srs.new_cards_per_day)?;
 
         // Build vocabulary cache for sentence context rendering
-        let mut vocabulary_cache = HashMap::new();
-        {
-            let mut stmt = conn.prepare("SELECT * FROM vocabulary")?;
-            let rows = stmt.query_map([], Vocabulary::from_row)?;
-            for row in rows {
-                if let Ok(v) = row {
-                    vocabulary_cache.insert((v.base_form.clone(), v.reading.clone()), v);
-                }
-            }
-        }
+        let vocabulary_cache = models::load_vocabulary_cache(&conn)?;
 
         // Build a gloss cache for sentence context tokens
         let mut gloss_cache: HashMap<String, String> = HashMap::new();
@@ -4467,23 +4441,8 @@ fn is_trivial_pos(pos: &str, surface: &str) -> bool {
             | "Conjunction"
             | "Prefix"
     ) || surface.trim().is_empty()
-        || is_numeric(surface)
-        || is_ascii_only(surface)
-}
-
-/// Check if a string is purely numeric.
-fn is_numeric(s: &str) -> bool {
-    let trimmed = s.trim();
-    !trimmed.is_empty()
-        && trimmed
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '.' || c == ',' || ('０'..='９').contains(&c))
-}
-
-/// Check if a string contains only ASCII characters (English text, etc.).
-fn is_ascii_only(s: &str) -> bool {
-    let trimmed = s.trim();
-    !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii())
+        || tokenizer::is_numeric(surface)
+        || tokenizer::is_ascii_only(surface)
 }
 
 /// Translate UniDic conjugation form names (Japanese) to English.

@@ -20,6 +20,8 @@ For remaining work, see `PLAN.md`.
 |  | Home |  | Library |  | Chapter  |  | Reader |  |Review| |
 |  |      |  |         |  | Select   |  |        |  |      | |
 |  +------+  +---------+  +----------+  +--------+  +------+ |
+|  | Stats|  |CardBrows|  |Settings  |                       |
+|  +------+  +---------+  +----------+                       |
 |      \         |    Esc↑  ↓Enter  Esc↑   ↑  Tab↕          |
 |       `---Esc--'                         Tab               |
 |  +-------------------------------------------------------+  |
@@ -30,6 +32,9 @@ For remaining work, see `PLAN.md`.
 |  +----------+ +-----------+ +------------+ +-----------+    |
 |  | Importer | | lindera  | |  fsrs-rs   | | JMdict DB |    |
 |  +----------+ +-----------+ +------------+ +-----------+    |
+|  +----------+ +-----------+                                 |
+|  | LLM API  | | Theming  |                                 |
+|  +----------+ +-----------+                                 |
 +-------------------------------------------------------------+
 |  +------------+   +------------------------------------+    |
 |  | rusqlite   |   | reqwest (HTTP)                     |    |
@@ -58,7 +63,6 @@ For remaining work, see `PLAN.md`.
 ```text
 kotoba/
 ├── Cargo.toml
-├── build.rs
 ├── DESCRIPTION.md          # This file
 ├── PLAN.md                 # Remaining work
 ├── src/
@@ -68,10 +72,10 @@ kotoba/
 │   ├── ui/
 │   │   ├── mod.rs          # Screen dispatch (render routing)
 │   │   ├── events.rs       # crossterm key/tick event loop
+│   │   ├── theme.rs        # Theme system: 4 built-in themes + custom TOML loading + color fallback
 │   │   ├── components/
 │   │   │   ├── furigana.rs # CJK-aware furigana rendering + line layout
-│   │   │   ├── text_area.rs# Scrollable paragraph rendering
-│   │   │   ├── sidebar.rs  # Dictionary / context panel
+│   │   │   ├── sidebar.rs  # Dictionary / context panel + LLM analysis display
 │   │   │   ├── popup.rs    # All popup overlay renderers
 │   │   │   └── status_bar.rs
 │   │   └── screens/
@@ -81,24 +85,29 @@ kotoba/
 │   │       ├── library.rs
 │   │       ├── chapter_select.rs
 │   │       ├── card_browser.rs
-│   │       └── settings.rs
+│   │       ├── settings.rs
+│   │       ├── stats.rs        # Learning analytics dashboard
+│   │       └── placeholder.rs  # Placeholder for unimplemented screens
 │   ├── core/
 │   │   ├── tokenizer.rs    # lindera/UniDic wrapper + conjugation grouping
 │   │   ├── dictionary.rs   # SQLite JMdict lookups
-│   │   └── srs.rs          # FSRS engine, card creation, review recording
+│   │   ├── srs.rs          # FSRS engine, card creation, review recording
+│   │   └── llm.rs          # LLM integration (sentence analysis, caching)
 │   ├── db/
 │   │   ├── connection.rs   # rusqlite setup (WAL mode, busy_timeout)
-│   │   ├── schema.rs       # 19 SQL migrations
-│   │   └── models.rs       # Rust structs mapped to DB tables + CRUD functions
+│   │   ├── schema.rs       # 20 SQL migrations
+│   │   ├── models.rs       # Rust structs mapped to DB tables + CRUD functions
+│   │   └── stats.rs        # Aggregate stats queries (overview, SRS, coverage)
 │   └── import/
 │       ├── text.rs          # Plain text import
 │       ├── web.rs           # URL / HTML import
-│       ├── syosetsu.rs      # Syosetsu (小説家になろう) novel import
+│       ├── syosetu.rs       # Syosetu (小説家になろう) novel import
 │       ├── epub.rs          # EPUB book import
 │       ├── subtitle.rs      # SRT / ASS subtitle import
-│       └── clipboard.rs     # Clipboard import (arboard)
+│       ├── clipboard.rs     # Clipboard import (arboard)
+│       └── background.rs    # Background import thread pool + event system
 └── data/
-    └── JMdict_e.xml         # Seed dictionary data
+    └── (JMdict_e.xml)       # Downloaded via `kotoba setup-dict`
 ```
 
 ---
@@ -106,7 +115,7 @@ kotoba/
 ## Screens
 
 ### Home
-Dashboard with three panels: a GitHub-style **activity heatmap** (26 weeks, color-coded by daily activity intensity), a **quick stats** panel (streak, known/learning words, reviews today, due cards, 7-day accuracy), and the **recently read** list (up to 15 texts with progress bars, K/L/N% vocab breakdown). Tab switches focus between heatmap and text list; arrow keys navigate the heatmap to inspect individual days. Quick actions: `l` Library, `r` Review, `i` Import, `c` Card Browser, `s` Settings. Toggle finished texts with `f`.
+Dashboard with three panels: a GitHub-style **activity heatmap** (26 weeks, color-coded by daily activity intensity), a **quick stats** panel (streak, known/learning words, reviews today, due cards, 7-day accuracy), and the **recently read** list (up to 15 texts with progress bars, K/L/N% vocab breakdown). Tab switches focus between heatmap and text list; arrow keys navigate the heatmap to inspect individual days. Quick actions: `l` Library, `r` Review, `i` Import, `c` Card Browser, `s` Settings, `S` Stats. Toggle finished texts with `f`.
 
 ### Library
 Full list of all imported content — standalone texts and grouped multi-chapter sources (Syosetu, EPUB). Supports sorting (`s`: date desc/asc, title A-Z, completion %), filtering by source type (`f`), searching by title (`/`), and deletion (`d`). Enter opens text in Reader or source in ChapterSelect.
@@ -117,13 +126,15 @@ Paginated chapter list (50/page) for multi-chapter sources. Shows chapter groups
 ### Reader
 Interactive sentence-by-sentence Japanese text reader with:
 - **Main area** (70%): All text rendered with furigana above kanji, vocabulary colored by status, current sentence highlighted with `▶` marker
-- **Sidebar** (30%): Current sentence breakdown with per-word readings, POS, JMdict glosses, conjugation descriptions, MWE glosses
+- **Sidebar** (30%): Current sentence breakdown with per-word readings, POS, JMdict glosses, conjugation descriptions, MWE glosses. Optionally shows LLM analysis (translation + explanation) via `Ctrl+T`.
 - **Navigation**: Up/Down moves between sentences, Left/Right selects words (skips trivial tokens and non-head group members)
 - **Status keys**: `1`-`4` set Learning (auto-creates SRS cards), `5` Known (retires cards), `i` Ignored
-- **Translation**: `t` edit word translation, `T` edit sentence translation (creates SRS sentence_full card)
+- **Translation**: `t` edit word translation, `T` edit sentence translation (creates SRS sentence_full card), `Ctrl+T` LLM auto-translate
 - **Expression marking**: `m` enters expression mode to mark multi-word expressions
 - **Autopromotion**: New words auto-promoted to Known when advancing past a sentence; toggle with `a`, undo with `Ctrl+Z`
 - **Clipboard**: `c` copy word, `C` copy sentence
+- **Browser lookup**: `g` open word on Jisho.org, `G` open sentence in DeepL/Google Translate
+- **Sidebar toggles**: `w` toggle Known/Ignored words in sidebar, `r` toggle all readings
 - **Auto-advance**: Automatically moves to next chapter at end of text
 
 ### Review
@@ -132,16 +143,16 @@ FSRS-powered flashcard review with two card types:
 - **Sentence Cloze** (optional variant): When `enable_sentence_cloze` is on, word cards randomly show a sentence cloze variant (word blanked, recall the word) with configurable probability.
 - **Sentence Full**: Full Japanese sentence, recall English translation.
 
-All modes show sentence context with vocabulary coloring. Context words are navigable (Left/Right) and tappable (Enter for dictionary). Rating: `1` Again, `2` Hard, `3`/Space Good, `4` Easy. Session summary shown at end with accuracy stats.
+All modes show sentence context with vocabulary coloring. Context words are navigable (Left/Right) and tappable (Enter for dictionary). Rating: `1` Again, `2` Hard, `3`/Space Good, `4` Easy. Session summary shown at end with accuracy stats. `Ctrl+L` requests LLM analysis of the card's sentence.
 
 ### Card Browser
-Browse all SRS cards with filtering (All, Due Now, Word Cards, Sentence Cards, New, Learning, Review, Retired) and sorting (Due Date, Created Date, Word). Column-aligned display with unicode-width-aware padding. Per-card actions: `r` reset to New, `d` delete.
+Browse all SRS cards with filtering (All, Due Now, Word Cards, Sentence Cards, New, Learning, Review, Retired) and sorting (Due Date, Created Date, Word). Column-aligned display with unicode-width-aware padding. Per-card actions: `r` reset to New, `d` delete, Enter for card detail popup.
 
 ### Stats
 Learning analytics dashboard with four panels on the left (overview, vocabulary growth chart, status breakdown bar, SRS review stats) and a per-text coverage list on the right. Overview shows total vocabulary counts by status and activity streak. Vocabulary growth chart renders a block-character line graph of cumulative Known words over a configurable time range (7d/30d/90d/All, toggled with `t`). Status breakdown is a color-coded horizontal stacked bar with legend. SRS panel shows due cards, review counts, accuracy rates (7d/30d), retention rate, and card state distribution. Coverage list shows each text with a visual coverage bar and percentage; selecting a text shows token breakdown detail; Enter opens it in the Reader. Tab switches focus between left panels and coverage list. Accessible from Home via `S`.
 
 ### Settings
-Two-panel settings editor with categories (Reader, SRS). Supports Bool toggles (Enter/Space), Integer inputs (Enter to edit), and Choice cycling (Enter/Space to cycle through options like answer mode and review order). Left/Right/Tab switches categories. Auto-saves on exit.
+Two-panel settings editor with categories (General, Reader, SRS, LLM). Supports Bool toggles (Enter/Space), Integer inputs (Enter to edit), Text inputs, and Choice cycling (Enter/Space to cycle through options like theme, answer mode, and review order). Left/Right/Tab switches categories. Live-previews theme changes. Auto-saves on exit.
 
 ---
 
@@ -159,6 +170,9 @@ Two-panel settings editor with categories (Reader, SRS). Supports Bool toggles (
 | `kotoba import-dict <path>` | Import JMdict XML into the database |
 | `kotoba setup-dict` | Download and set up JMdict automatically |
 | `kotoba syosetu <ncode>` | Import Syosetu novel (with `--chapter N` for specific chapter) |
+| `kotoba cache stats` | Show LLM cache statistics |
+| `kotoba cache clear` | Clear all cached LLM responses |
+| `kotoba config` | Show config file location and current settings |
 
 Global flag: `--config <path>` for custom config file location.
 
@@ -260,12 +274,20 @@ Post-tokenization pass that merges verb/adjective stems with following auxiliari
 
 TOML config file. Lookup order: `--config` flag → `~/.config/kotoba/kotoba.toml` → `./kotoba.toml` → defaults.
 
+### [general]
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `theme` | string | `"tokyo-night"` | Color theme (tokyo-night, light, solarized-light, gruvbox, or custom) |
+| `db_path` | path | (XDG data dir) | Override database location |
+
 ### [reader]
 | Setting | Type | Default | Description |
 | --- | --- | --- | --- |
 | `sidebar_width` | u16 | 30 | Sidebar width percentage (10-80) |
 | `furigana` | bool | true | Show furigana above kanji |
+| `sentence_gaps` | bool | true | Add 1-row gap between sentences for readability |
 | `preprocess_ahead` | usize | 3 | Chapters to preprocess ahead (0-20) |
+| `translation_service` | string | `"deepl"` | Browser translation for `G` key: `deepl` or `google` |
 
 ### [srs]
 | Setting | Type | Default | Description |
@@ -277,17 +299,17 @@ TOML config file. Lookup order: `--config` flag → `~/.config/kotoba/kotoba.tom
 | `enable_sentence_cloze` | bool | false | Enable sentence cloze variant for word cards |
 | `sentence_cloze_ratio` | u32 | 50 | Probability (0-100) of showing cloze variant |
 
-### [llm] (infrastructure only, not yet active)
-| Setting | Type | Default |
-| --- | --- | --- |
-| `endpoint` | string | `"https://api.openai.com/v1"` |
-| `api_key` | string | `""` |
-| `model` | string | `"gpt-4o"` |
-| `max_tokens` | usize | 2048 |
+### [llm]
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `endpoint` | string | `"https://openrouter.ai/api/v1"` | OpenAI-compatible API endpoint |
+| `api_key` | string | `""` | API key for the LLM service |
+| `model` | string | `"google/gemini-3.1-flash-lite-preview"` | Model name |
+| `max_tokens` | usize | 2048 | Maximum tokens per LLM response |
 
 ---
 
-## Database Schema (19 migrations)
+## Database Schema (20 migrations)
 
 | Table | Purpose |
 | --- | --- |
@@ -299,7 +321,7 @@ TOML config file. Lookup order: `--config` flag → `~/.config/kotoba/kotoba.tom
 | `conjugation_encounters` | Tracks conjugated forms encountered per vocabulary item |
 | `srs_cards` | SRS flashcards with FSRS state, card type |
 | `srs_reviews` | Review log with timing, rating, typed answer |
-| `llm_cache` | Cache for future LLM API responses |
+| `llm_cache` | Cache for LLM API responses |
 | `jmdict_entries` | JMdict dictionary entries (JSON blob) |
 | `jmdict_kanji` | JMdict kanji element index |
 | `jmdict_readings` | JMdict reading element index |
@@ -307,6 +329,7 @@ TOML config file. Lookup order: `--config` flag → `~/.config/kotoba/kotoba.tom
 | `web_source_chapters` | Chapters within sources with import/skip state |
 | `user_expressions` | User-created multi-word expressions |
 | `sentence_translations` | Sentence translations (for SRS sentence_full cards) |
+| `daily_activity` | Daily activity counters (sentences read, words learned, reviews) |
 
 ---
 
@@ -315,6 +338,7 @@ TOML config file. Lookup order: `--config` flag → `~/.config/kotoba/kotoba.tom
 | Popup | Trigger | Purpose |
 | --- | --- | --- |
 | WordDetail | `Enter` in Reader/Review | Full dictionary entry with all senses, conjugation history, notes |
+| CardDetail | `Enter` in CardBrowser | Word detail + sentence contexts for a card |
 | Help | `?` anywhere | Scrollable keybinding reference |
 | NoteEditor | `n` in Reader | Edit vocabulary notes |
 | TranslationEditor | `t` in Reader | Edit custom word translation |
