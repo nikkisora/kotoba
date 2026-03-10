@@ -388,7 +388,7 @@ impl ChapterSelectState {
         } else {
             // Approximate: we can't know exact page count without walking all
             // group headers, but page_size gives a reasonable estimate.
-            (self.chapters.len() + self.page_size - 1) / self.page_size
+            self.chapters.len().div_ceil(self.page_size)
         }
     }
 
@@ -1735,20 +1735,21 @@ impl App {
             }
 
             // Check if this token is an MWE group head
-            let (mwe_surface, mwe_gloss) =
-                if token.is_group_head && !token.mwe_gloss.is_empty() && token.group_id.is_some() {
-                    // Reconstruct the full MWE surface from all group members
-                    let gid = token.group_id.unwrap();
-                    let surface: String = sentence
-                        .tokens
-                        .iter()
-                        .filter(|t| t.group_id == Some(gid))
-                        .map(|t| t.surface.as_str())
-                        .collect();
-                    (Some(surface), Some(token.mwe_gloss.clone()))
-                } else {
-                    (None, None)
-                };
+            let (mwe_surface, mwe_gloss) = if let Some(gid) = token
+                .group_id
+                .filter(|_| token.is_group_head && !token.mwe_gloss.is_empty())
+            {
+                // Reconstruct the full MWE surface from all group members
+                let surface: String = sentence
+                    .tokens
+                    .iter()
+                    .filter(|t| t.group_id == Some(gid))
+                    .map(|t| t.surface.as_str())
+                    .collect();
+                (Some(surface), Some(token.mwe_gloss.clone()))
+            } else {
+                (None, None)
+            };
 
             let key = (token.base_form.clone(), token.reading.clone());
             let vocab = state.vocabulary_cache.get(&key);
@@ -1937,10 +1938,10 @@ impl App {
                     None,
                     &conn,
                 )?;
-                let text = models::get_text_by_id(&conn, text_id)?
+
+                models::get_text_by_id(&conn, text_id)?
                     .map(|t| t.title)
-                    .unwrap_or_default();
-                text
+                    .unwrap_or_default()
             }
         };
         self.refresh_library()?;
@@ -4030,7 +4031,7 @@ impl App {
                 match item.key.as_str() {
                     "reader.sidebar_width" => {
                         if let SettingsValue::Integer(v) = &item.value {
-                            self.config.reader.sidebar_width = (*v).max(10).min(80) as u16;
+                            self.config.reader.sidebar_width = (*v).clamp(10, 80) as u16;
                         }
                     }
                     "reader.furigana" => {
@@ -4045,7 +4046,7 @@ impl App {
                     }
                     "reader.preprocess_ahead" => {
                         if let SettingsValue::Integer(v) = &item.value {
-                            self.config.reader.preprocess_ahead = (*v).max(0).min(20) as usize;
+                            self.config.reader.preprocess_ahead = (*v).clamp(0, 20) as usize;
                         }
                     }
                     "reader.translation_service" => {
@@ -4082,7 +4083,7 @@ impl App {
                     }
                     "srs.sentence_cloze_ratio" => {
                         if let SettingsValue::Integer(v) = &item.value {
-                            self.config.srs.sentence_cloze_ratio = (*v).max(0).min(100) as u32;
+                            self.config.srs.sentence_cloze_ratio = (*v).clamp(0, 100) as u32;
                         }
                     }
                     "llm.endpoint" => {
@@ -4102,7 +4103,7 @@ impl App {
                     }
                     "llm.max_tokens" => {
                         if let SettingsValue::Integer(v) = &item.value {
-                            self.config.llm.max_tokens = (*v).max(64).min(16384) as usize;
+                            self.config.llm.max_tokens = (*v).clamp(64, 16384) as usize;
                         }
                     }
                     "general.theme" => {
@@ -4340,8 +4341,8 @@ fn detect_sentence_mwes(
         let mut combined = String::new();
 
         let end = tokens.len().min(i + max_window);
-        for j in i..end {
-            combined.push_str(&tokens[j].surface);
+        for (j, token) in tokens.iter().enumerate().take(end).skip(i) {
+            combined.push_str(&token.surface);
 
             // Skip single-token matches (already handled by normal vocabulary)
             if j <= i {
@@ -4422,7 +4423,7 @@ fn apply_mwe_matches(tokens: &mut [TokenDisplay], matches: &[MweMatch]) {
 
         // Set the head's description
         if head_idx < tokens.len() {
-            tokens[head_idx].conjugation_desc = format!("expression");
+            tokens[head_idx].conjugation_desc = "expression".to_string();
         }
     }
 }

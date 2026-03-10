@@ -52,7 +52,7 @@ pub fn is_numeric(s: &str) -> bool {
 /// Check if a string contains only ASCII characters (English text, punctuation, etc.).
 pub fn is_ascii_only(s: &str) -> bool {
     let trimmed = s.trim();
-    !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii())
+    !trimmed.is_empty() && trimmed.is_ascii()
 }
 
 /// Initialize a lindera tokenizer with the bundled UniDic dictionary.
@@ -645,7 +645,7 @@ fn build_conjugation_description(tokens: &[GroupToken], members: &[usize]) -> St
 
     // Add labels for each auxiliary based on its base_form
     for &idx in &members[1..] {
-        let label = auxiliary_label(&tokens[idx].base_form);
+        let label = auxiliary_label(tokens[idx].base_form);
         if !label.is_empty() {
             parts.push(label);
         }

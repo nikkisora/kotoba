@@ -409,10 +409,10 @@ impl Theme {
 
         if supports_256 {
             // Convert RGB to nearest 256-color
-            self.map_colors(|c| rgb_to_256(c));
+            self.map_colors(rgb_to_256);
         } else {
             // Convert to 16-color ANSI palette
-            self.map_colors(|c| rgb_to_16(c));
+            self.map_colors(rgb_to_16);
         }
     }
 

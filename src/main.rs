@@ -436,7 +436,7 @@ fn run_tui(config: config::AppConfig) -> Result<()> {
 fn handle_key_event(app: &mut App, key: KeyEvent) {
     // Handle popups first
     if let Some(ref popup) = app.popup.clone() {
-        handle_popup_key(app, key, &popup);
+        handle_popup_key(app, key, popup);
         return;
     }
 
@@ -612,9 +612,7 @@ fn handle_mouse_event(
 
     for (sent_idx, sentence) in state.sentences.iter().enumerate() {
         let gap: u16 = if let Some(pp) = prev_para {
-            if sentence.paragraph_idx != pp {
-                1
-            } else if sentence_gaps {
+            if sentence.paragraph_idx != pp || sentence_gaps {
                 1
             } else {
                 0
@@ -2160,7 +2158,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Down | KeyCode::Char('j') => {
             let departing = {
-                let result = if let Some(ref mut state) = app.reader_state {
+                if let Some(ref mut state) = app.reader_state {
                     if state.sentence_index + 1 < state.sentences.len() {
                         let dep = state.sentence_index;
                         state.sentence_index += 1;
@@ -2173,8 +2171,7 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                     }
                 } else {
                     None
-                };
-                result
+                }
             };
             if let Some((dep, is_at_end)) = departing {
                 // Collect sentence contexts for Learning words before autopromoting
@@ -2469,10 +2466,8 @@ fn handle_reader_key(app: &mut App, key: KeyEvent) {
                 if let Some(ref mut state) = app.reader_state {
                     state.word_index = None;
                 }
-            } else {
-                if let Err(e) = app.back_from_reader() {
-                    app.set_message(format!("Error: {}", e));
-                }
+            } else if let Err(e) = app.back_from_reader() {
+                app.set_message(format!("Error: {}", e));
             }
         }
 

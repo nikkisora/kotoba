@@ -4,7 +4,7 @@
 //! stays responsive. Communicates results back via mpsc channel.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -543,7 +543,7 @@ fn run_import_task(
 #[allow(unused_assignments)]
 fn fetch_novel_info_blocking(
     ncode: &str,
-    db_path: &PathBuf,
+    db_path: &Path,
     tx: &mpsc::Sender<ImportEvent>,
 ) -> anyhow::Result<(i64, String)> {
     let client = reqwest::blocking::Client::builder()
@@ -640,7 +640,7 @@ fn refresh_novel_blocking(
     source_id: i64,
     ncode: &str,
     existing_count: usize,
-    db_path: &PathBuf,
+    db_path: &Path,
     tx: &mpsc::Sender<ImportEvent>,
 ) -> anyhow::Result<()> {
     let client = reqwest::blocking::Client::builder()

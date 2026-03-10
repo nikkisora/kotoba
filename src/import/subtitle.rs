@@ -111,11 +111,9 @@ fn parse_srt(content: &str) -> Result<String> {
                 line_count += 1;
 
                 // Group every ~10 subtitle lines into a paragraph
-                if line_count % 10 == 0 {
-                    if !current_group.is_empty() {
-                        paragraphs.push(current_group);
-                        current_group = Vec::new();
-                    }
+                if line_count % 10 == 0 && !current_group.is_empty() {
+                    paragraphs.push(current_group);
+                    current_group = Vec::new();
                 }
             }
         }

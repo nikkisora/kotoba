@@ -39,6 +39,7 @@ const HEATMAP_ROWS: usize = 7;
 /// Build a 7×N grid of (date_string, activity_total) aligned to calendar weeks.
 /// Returns (grid, week_count, today_index) where grid[row][col] = Option<(date, total)>.
 /// Row 0 = Monday, Row 6 = Sunday. Columns are weeks, rightmost = current week.
+#[allow(clippy::type_complexity)]
 fn build_heatmap_grid(
     activity: &[DailyActivity],
     weeks: usize,
@@ -89,6 +90,7 @@ fn build_heatmap_grid(
     // days_before_today for cell (row, col) = (weeks - 1 - col) * 7 + (today_dow - row)
     // This can be negative if row > today_dow in the last column (future days).
 
+    #[allow(clippy::needless_range_loop)]
     for col in 0..weeks {
         for row in 0..HEATMAP_ROWS {
             let days_offset =
@@ -149,7 +151,7 @@ fn month_labels(grid: &[Vec<Option<(String, i64)>>], weeks: usize) -> Vec<(usize
 
     for col in 0..weeks {
         // Check Monday (row 0) of this week
-        if let Some(Some((ref date, _))) = grid.first().map(|r| r.get(col)).flatten() {
+        if let Some(Some((ref date, _))) = grid.first().and_then(|r| r.get(col)) {
             if let Some(month) = date.split('-').nth(1).and_then(|m| m.parse::<u32>().ok()) {
                 if month != last_month {
                     last_month = month;
@@ -181,7 +183,7 @@ fn render_heatmap(frame: &mut Frame, area: Rect, app: &App) {
     let available = area
         .width
         .saturating_sub(border_overhead + label_width as u16) as usize;
-    let weeks = (available / 2).min(HEATMAP_WEEKS).max(4);
+    let weeks = (available / 2).clamp(4, HEATMAP_WEEKS);
 
     let (grid, _, today_idx) = build_heatmap_grid(&home.activity, weeks);
     let month_labs = month_labels(&grid, weeks);
@@ -205,7 +207,7 @@ fn render_heatmap(frame: &mut Frame, area: Rect, app: &App) {
             let chars_used = label_str.len();
             month_line_parts.push(Span::styled(label_str, Style::default().fg(t.muted)));
             // Advance col by chars used / 2 (each col is 2 chars wide)
-            col += (chars_used + 1) / 2;
+            col += chars_used.div_ceil(2);
         }
     }
 
@@ -223,6 +225,7 @@ fn render_heatmap(frame: &mut Frame, area: Rect, app: &App) {
         };
         spans.push(Span::styled(day_label, Style::default().fg(t.muted)));
 
+        #[allow(clippy::needless_range_loop)]
         for col in 0..weeks {
             let cell_idx = row * weeks + col;
             let (cell_char, cell_color) = match &grid[row][col] {
@@ -279,8 +282,7 @@ fn render_heatmap(frame: &mut Frame, area: Rect, app: &App) {
         let cursor_row = cursor / weeks;
         let cursor_col = cursor % weeks;
         if cursor_row < HEATMAP_ROWS {
-            if let Some(Some((ref date, _))) =
-                grid.get(cursor_row).map(|r| r.get(cursor_col)).flatten()
+            if let Some(Some((ref date, _))) = grid.get(cursor_row).and_then(|r| r.get(cursor_col))
             {
                 // Look up full activity for this date
                 let act = home.activity.iter().find(|a| a.date == *date);
@@ -322,7 +324,7 @@ pub fn heatmap_weeks_for_width(width: u16) -> usize {
     let border_overhead = 2u16;
     let label_width = 4u16;
     let available = width.saturating_sub(border_overhead + label_width) as usize;
-    (available / 2).min(HEATMAP_WEEKS).max(4)
+    (available / 2).clamp(4, HEATMAP_WEEKS)
 }
 
 /// Render the quick stats panel.

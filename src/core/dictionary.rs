@@ -166,8 +166,7 @@ pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
     let mut reader = Reader::from_str(&content);
     reader.trim_text(true);
 
-    let tx = conn.execute_batch("BEGIN TRANSACTION;")?;
-    let _ = tx;
+    conn.execute_batch("BEGIN TRANSACTION;")?;
 
     let mut entry_count = 0u64;
     let mut current_entry: Option<EntryBuilder> = None;
@@ -217,7 +216,7 @@ pub fn import_jmdict(path: &Path, conn: &Connection) -> Result<()> {
                             insert_dict_entry(conn, &entry)?;
                             entry_count += 1;
 
-                            if entry_count % 1000 == 0 {
+                            if entry_count.is_multiple_of(1000) {
                                 pb.set_position(entry_count);
                             }
                         }
@@ -330,17 +329,15 @@ pub fn lookup(conn: &Connection, base_form: &str, reading: Option<&str>) -> Resu
         Ok(json)
     })?;
 
-    for row in rows {
-        if let Ok(json) = row {
-            if let Ok(entry) = serde_json::from_str::<DictEntry>(&json) {
-                // If reading is specified, filter by it
-                if let Some(r) = reading {
-                    if entry.readings.iter().any(|er| er == r) {
-                        entries.push(entry);
-                    }
-                } else {
+    for json in rows.flatten() {
+        if let Ok(entry) = serde_json::from_str::<DictEntry>(&json) {
+            // If reading is specified, filter by it
+            if let Some(r) = reading {
+                if entry.readings.iter().any(|er| er == r) {
                     entries.push(entry);
                 }
+            } else {
+                entries.push(entry);
             }
         }
     }
@@ -358,11 +355,9 @@ pub fn lookup(conn: &Connection, base_form: &str, reading: Option<&str>) -> Resu
             Ok(json)
         })?;
 
-        for row in rows {
-            if let Ok(json) = row {
-                if let Ok(entry) = serde_json::from_str::<DictEntry>(&json) {
-                    entries.push(entry);
-                }
+        for json in rows.flatten() {
+            if let Ok(entry) = serde_json::from_str::<DictEntry>(&json) {
+                entries.push(entry);
             }
         }
     }

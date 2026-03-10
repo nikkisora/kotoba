@@ -81,7 +81,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let total_pages = if filtered_count == 0 {
         1
     } else {
-        (filtered_count + page_size.max(1) - 1) / page_size.max(1)
+        filtered_count.div_ceil(page_size.max(1))
     };
     let current_page = if page_size > 0 {
         page_start / page_size + 1
@@ -159,6 +159,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
         // Only render the current page slice
         let page_end = (page_start + page_size).min(filtered_count);
+        #[allow(clippy::needless_range_loop)]
         for display_idx in page_start..page_end {
             let &entry_idx = &filtered[display_idx];
             let entry = &state.unwrap().entries[entry_idx];

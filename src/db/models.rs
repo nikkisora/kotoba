@@ -307,6 +307,7 @@ pub fn list_paragraphs_by_text(conn: &Connection, text_id: i64) -> Result<Vec<Pa
 }
 
 /// Insert a token and return its id.
+#[allow(clippy::too_many_arguments)]
 pub fn insert_token(
     conn: &Connection,
     paragraph_id: i64,
@@ -1017,6 +1018,7 @@ pub fn get_srs_card(conn: &Connection, id: i64) -> Result<Option<SrsCard>> {
 }
 
 /// Update an SRS card's FSRS state after a review.
+#[allow(clippy::too_many_arguments)]
 pub fn update_srs_card_state(
     conn: &Connection,
     card_id: i64,
@@ -1225,6 +1227,7 @@ impl SentenceTranslation {
 }
 
 /// Upsert a sentence translation. Returns the id.
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_sentence_translation(
     conn: &Connection,
     text_id: i64,

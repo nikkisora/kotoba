@@ -159,10 +159,8 @@ fn render_main_text(frame: &mut Frame, app: &App, state: &crate::app::ReaderStat
 
     for (sent_idx, sentence) in state.sentences.iter().enumerate() {
         let gap: u16 = if let Some(pp) = prev_para {
-            if sentence.paragraph_idx != pp {
-                1 // paragraph break — always 1 row
-            } else if sentence_gaps {
-                1 // intra-paragraph gap when enabled
+            if sentence.paragraph_idx != pp || sentence_gaps {
+                1 // paragraph break or intra-paragraph gap when enabled
             } else {
                 0
             }

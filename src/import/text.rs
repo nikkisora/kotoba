@@ -102,8 +102,6 @@ fn import_text_inner(
     let paragraphs = tokenizer::split_paragraphs(content);
     let mut total_tokens = 0usize;
     let mut new_vocab = 0usize;
-    let mut _para_count = 0usize;
-
     if let Some(pb) = progress {
         pb.set_length(paragraphs.len() as u64);
         pb.set_position(0);
@@ -111,7 +109,6 @@ fn import_text_inner(
 
     for (para_idx, para_text) in paragraphs.iter().enumerate() {
         let para_id = models::insert_paragraph(conn, text_id, para_idx as i32, para_text)?;
-        _para_count += 1;
 
         // Split paragraph into sentences and tokenize each
         let sentences = tokenizer::split_sentences(para_text);
@@ -152,7 +149,7 @@ fn import_text_inner(
                         c.is_ascii_digit() || c == '.' || c == ',' || ('０'..='９').contains(&c)
                     }) && !token_info.surface.trim().is_empty();
                     let is_ascii = !token_info.surface.trim().is_empty()
-                        && token_info.surface.trim().chars().all(|c| c.is_ascii());
+                        && token_info.surface.trim().is_ascii();
                     let auto_ignore = matches!(
                         token_info.pos.as_str(),
                         "Particle" | "Auxiliary" | "Conjunction" | "Prefix"
@@ -310,7 +307,7 @@ pub fn write_pretokenized(
                             c.is_ascii_digit() || c == '.' || c == ',' || ('０'..='９').contains(&c)
                         }) && !token_info.surface.trim().is_empty();
                         let is_ascii = !token_info.surface.trim().is_empty()
-                            && token_info.surface.trim().chars().all(|c| c.is_ascii());
+                            && token_info.surface.trim().is_ascii();
                         let auto_ignore = matches!(
                             token_info.pos.as_str(),
                             "Particle" | "Auxiliary" | "Conjunction" | "Prefix"

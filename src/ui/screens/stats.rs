@@ -261,8 +261,8 @@ fn render_vocab_chart(
         let row_from_bottom = chart_height - 1 - row;
         let mut spans = Vec::new();
 
-        for col in 0..values.len().min(inner_width) {
-            let val = values[col];
+        for val in values.iter().take(values.len().min(inner_width)) {
+            let val = *val;
             let normalized = if range > 0 {
                 (val - min_val) as f64 / range as f64
             } else {
