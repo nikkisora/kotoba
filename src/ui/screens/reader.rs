@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -38,7 +38,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" — "),
-        Span::styled(&state.text_title, Style::default().fg(Color::White)),
+        Span::styled(&state.text_title, Style::default().fg(t.title_bar_fg)),
         Span::raw("  "),
         Span::styled("[?]help", Style::default().fg(t.muted)),
     ]);
@@ -114,7 +114,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     let status = Line::from(vec![
         Span::styled(
             format!(" {} {} ", sentence_info, word_info),
-            Style::default().fg(Color::White),
+            Style::default().fg(t.title_bar_fg),
         ),
         autopromote_indicator,
         readings_indicator,

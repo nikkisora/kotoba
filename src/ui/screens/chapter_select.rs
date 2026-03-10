@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -169,9 +169,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                 Some(ChapterReadState::InProgress) => {
                     ("◐".to_string(), Style::default().fg(t.chapter_in_progress))
                 }
-                Some(ChapterReadState::Unread) => {
-                    ("○".to_string(), Style::default().fg(Color::White))
-                }
+                Some(ChapterReadState::Unread) => ("○".to_string(), Style::default().fg(t.fg)),
                 _ => ("—".to_string(), Style::default().fg(t.muted)),
             }
         };

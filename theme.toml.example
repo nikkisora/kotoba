@@ -1,58 +1,56 @@
-# kotoba theme overrides
+# kotoba custom theme
 #
-# Place this file at ~/.config/kotoba/theme.toml to customize the active theme.
-# These values override the built-in theme selected in settings (general.theme).
+# Custom themes are standalone .toml files placed in the themes directory:
+#   ~/.local/share/kotoba/themes/
 #
-# Colors are specified as hex strings: "#RRGGBB" or "RRGGBB".
-# Only include the fields you want to override — everything else uses the
-# built-in theme defaults.
+# The filename (without .toml) becomes the theme name. For example:
+#   ~/.local/share/kotoba/themes/my-dark.toml  ->  theme name: "my-dark"
 #
-# Available built-in themes: tokyo-night (default), solarized-light, gruvbox
-# Set the base theme in kotoba.toml or in the TUI Settings screen:
-#   [general]
-#   theme = "tokyo-night"
+# Custom themes appear alongside built-in themes in Settings and can be
+# shared by simply sending the .toml file.
+#
+# Colors are hex strings: "#RRGGBB" or "RRGGBB".
+# Any field you omit falls back to the tokyo-night default.
+#
+# Built-in themes: tokyo-night, light, solarized-light, gruvbox
 
 # ── Base colors ──
-# Background and foreground for the entire application.
 [base]
-# bg = "#1a1b26"           # Main background
-# fg = "#a9b1d6"           # Default text color
-# title_bar_bg = "#24283b" # Title bar and status bar background
+bg = "#1a1b26"               # Main background
+fg = "#a9b1d6"               # Default text color
+title_bar_bg = "#24283b"     # Title/status bar background
+title_bar_fg = "#ffffff"     # Title/status bar text
 
 # ── Semantic palette ──
-# Used for highlights, indicators, and UI accents throughout the app.
 [palette]
-# accent  = "#7aa2f7"      # Brand color — app name, selected items, cursor
-# info    = "#7dcfff"      # Informational — borders, new-card indicator
-# success = "#9ece6a"      # Positive — import success, known words, good rating
-# warning = "#e0af68"      # Attention — due cards, learning status
-# error   = "#f7768e"      # Destructive — delete, skip, fail rating
-# muted   = "#565f89"      # De-emphasized — hints, help text, furigana
-# subtle  = "#bb9af7"      # Secondary accent — group headers
+accent  = "#7aa2f7"          # Brand color — app name, selected items, cursor
+info    = "#7dcfff"          # Informational — borders, new-card indicator
+success = "#9ece6a"          # Positive — import success, known words
+warning = "#e0af68"          # Attention — due cards, learning status
+error   = "#f7768e"          # Destructive — delete, skip, fail
+muted   = "#565f89"          # De-emphasized — hints, help text, furigana
+subtle  = "#bb9af7"          # Secondary accent — group headers
 
 # ── Vocabulary status colors (reader) ──
-# Controls how words are highlighted inline based on their learning status.
-# Each status has a background (bg) and foreground (fg) color.
 [vocabulary]
-# new_bg     = "#3b4261"   # New/unseen words
-# new_fg     = "#c0caf5"
-# l1_bg      = "#2e3347"   # Learning stage 1
-# l1_fg      = "#ff9e64"
-# l2_bg      = "#2a2f42"   # Learning stage 2
-# l2_fg      = "#e0af68"
-# l3_bg      = "#252a3d"   # Learning stage 3
-# l3_fg      = "#9ece6a"
-# l4_bg      = "#1f2335"   # Learning stage 4 (nearly known)
-# l4_fg      = "#73daca"
-# ignored_fg = "#444b6a"   # Ignored/skipped words
+new_bg     = "#3b4261"       # New/unseen words
+new_fg     = "#c0caf5"
+l1_bg      = "#2e3347"       # Learning stage 1
+l1_fg      = "#ff9e64"
+l2_bg      = "#2a2f42"       # Learning stage 2
+l2_fg      = "#e0af68"
+l3_bg      = "#252a3d"       # Learning stage 3
+l3_fg      = "#9ece6a"
+l4_bg      = "#1f2335"       # Learning stage 4
+l4_fg      = "#73daca"
+ignored_fg = "#444b6a"       # Ignored/skipped words
 
 # ── UI element colors ──
-# Fine-grained control over specific UI elements.
 [ui]
-# progress_bar       = "#3d59a1"  # Reading progress bar
-# stats_text         = "#565f89"  # Statistics text (K%/L%/N%)
-# status_msg_fg      = "#1a1b26"  # Status bar message foreground
-# status_msg_bg      = "#e0af68"  # Status bar message background
-# cloze_reveal_fg    = "#9ece6a"  # Revealed word in cloze cards
-# cloze_reveal_bg    = "#1f2335"  # Background for revealed cloze word
-# chapter_in_progress = "#e0af68" # Chapter currently being read
+progress_bar        = "#3d59a1"
+stats_text          = "#565f89"
+status_msg_fg       = "#1a1b26"
+status_msg_bg       = "#e0af68"
+cloze_reveal_fg     = "#9ece6a"
+cloze_reveal_bg     = "#1f2335"
+chapter_in_progress = "#e0af68"

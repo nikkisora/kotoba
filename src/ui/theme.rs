@@ -16,6 +16,7 @@ pub struct Theme {
     pub bg: Color,
     pub fg: Color,
     pub title_bar_bg: Color,
+    pub title_bar_fg: Color,
 
     // ── Semantic palette ──
     pub accent: Color,  // Brand color — app name, selected items, cursor marker
@@ -57,19 +58,50 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Get a built-in theme by name.
-    pub fn by_name(name: &str) -> Self {
+    const BUILTIN_NAMES: &'static [&'static str] =
+        &["tokyo-night", "light", "solarized-light", "gruvbox"];
+
+    /// Get a built-in theme by name. Returns `None` if not a built-in.
+    pub fn builtin(name: &str) -> Option<Self> {
         match name {
-            "light" => Self::light(),
-            "solarized-light" => Self::solarized_light(),
-            "gruvbox" => Self::gruvbox(),
-            _ => Self::tokyo_night(), // default
+            "tokyo-night" => Some(Self::tokyo_night()),
+            "light" => Some(Self::light()),
+            "solarized-light" => Some(Self::solarized_light()),
+            "gruvbox" => Some(Self::gruvbox()),
+            _ => None,
         }
     }
 
-    /// List available built-in theme names.
-    pub fn available_themes() -> Vec<&'static str> {
-        vec!["tokyo-night", "light", "solarized-light", "gruvbox"]
+    /// Directory where custom theme .toml files are stored.
+    /// Same parent as the database: ~/.local/share/kotoba/themes/
+    pub fn themes_dir() -> std::path::PathBuf {
+        dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("kotoba")
+            .join("themes")
+    }
+
+    /// List all available theme names: built-ins first, then custom .toml files
+    /// discovered in the themes directory.
+    pub fn available_themes() -> Vec<String> {
+        let mut names: Vec<String> = Self::BUILTIN_NAMES.iter().map(|s| s.to_string()).collect();
+
+        let themes_dir = Self::themes_dir();
+        if let Ok(entries) = std::fs::read_dir(&themes_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        let name = stem.to_string();
+                        if !names.contains(&name) {
+                            names.push(name);
+                        }
+                    }
+                }
+            }
+        }
+
+        names
     }
 
     /// Tokyo Night (dark) — the default theme.
@@ -78,6 +110,7 @@ impl Theme {
             bg: Color::Reset,
             fg: Color::Reset,
             title_bar_bg: Color::Rgb(30, 30, 50),
+            title_bar_fg: Color::White,
 
             accent: Color::Cyan,
             info: Color::Blue,
@@ -126,7 +159,8 @@ impl Theme {
         Self {
             bg: white,
             fg: black,
-            title_bar_bg: Color::Rgb(240, 240, 240),
+            title_bar_bg: Color::Rgb(230, 230, 230),
+            title_bar_fg: Color::Rgb(30, 30, 30),
 
             accent: Color::Rgb(0, 95, 175),   // strong blue
             info: Color::Rgb(30, 120, 190),   // medium blue
@@ -188,6 +222,7 @@ impl Theme {
             bg: base3,
             fg: base00,
             title_bar_bg: base02,
+            title_bar_fg: base3,
 
             accent: cyan,
             info: blue,
@@ -246,6 +281,7 @@ impl Theme {
             bg: Color::Reset,
             fg: Color::Reset,
             title_bar_bg: bg0,
+            title_bar_fg: fg0,
 
             accent: aqua,
             info: blue,
@@ -283,26 +319,35 @@ impl Theme {
         }
     }
 
-    /// Try to load theme overrides from a TOML file, falling back to a built-in theme.
-    pub fn load(base_name: &str, path: Option<&Path>) -> Self {
-        let mut theme = Self::by_name(base_name);
+    /// Load a theme by name.
+    ///
+    /// Resolution order:
+    /// 1. Built-in theme if `name` matches one of the built-in names.
+    /// 2. Custom theme file at `<themes_dir>/<name>.toml`.
+    ///    Custom themes start from tokyo-night defaults, then apply all
+    ///    fields specified in the TOML file.
+    /// 3. Falls back to tokyo-night if nothing matches.
+    pub fn load(name: &str, _path: Option<&Path>) -> Self {
+        // 1. Try built-in
+        if let Some(theme) = Self::builtin(name) {
+            return theme;
+        }
 
-        // Try to load overrides from theme.toml
-        let theme_path = path
-            .map(|p| p.to_path_buf())
-            .or_else(|| dirs::config_dir().map(|d| d.join("kotoba").join("theme.toml")));
-
-        if let Some(ref path) = theme_path {
-            if path.exists() {
-                if let Ok(content) = std::fs::read_to_string(path) {
-                    if let Ok(overrides) = toml::from_str::<ThemeOverrides>(&content) {
-                        overrides.apply(&mut theme);
-                    }
+        // 2. Try custom theme file
+        let theme_path = Self::themes_dir().join(format!("{}.toml", name));
+        if theme_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&theme_path) {
+                if let Ok(overrides) = toml::from_str::<ThemeOverrides>(&content) {
+                    // Start from tokyo-night as a safe base, then apply all custom colors
+                    let mut theme = Self::tokyo_night();
+                    overrides.apply(&mut theme);
+                    return theme;
                 }
             }
         }
 
-        theme
+        // 3. Fallback
+        Self::tokyo_night()
     }
 
     /// Downgrade RGB colors to 256-color or 16-color palette based on terminal
@@ -334,6 +379,7 @@ impl Theme {
         self.bg = f(self.bg);
         self.fg = f(self.fg);
         self.title_bar_bg = f(self.title_bar_bg);
+        self.title_bar_fg = f(self.title_bar_fg);
         self.accent = f(self.accent);
         self.info = f(self.info);
         self.success = f(self.success);
@@ -388,6 +434,7 @@ struct BaseOverrides {
     bg: Option<String>,
     fg: Option<String>,
     title_bar_bg: Option<String>,
+    title_bar_fg: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -433,6 +480,7 @@ impl ThemeOverrides {
             apply_color(&base.bg, &mut theme.bg);
             apply_color(&base.fg, &mut theme.fg);
             apply_color(&base.title_bar_bg, &mut theme.title_bar_bg);
+            apply_color(&base.title_bar_fg, &mut theme.title_bar_fg);
         }
         if let Some(ref palette) = self.palette {
             apply_color(&palette.accent, &mut theme.accent);

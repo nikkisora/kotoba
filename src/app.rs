@@ -3361,10 +3361,7 @@ impl App {
         let srs = &self.config.srs;
         let reader = &self.config.reader;
 
-        let theme_names: Vec<String> = Theme::available_themes()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let theme_names = Theme::available_themes();
 
         let categories = vec![
             SettingsCategory {

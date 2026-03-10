@@ -320,10 +320,12 @@ fn main() -> Result<()> {
             println!("    model             = {}", cfg.llm.model);
             println!("    max_tokens        = {}", cfg.llm.max_tokens);
             println!();
+            println!("Themes dir:   {}", ui::theme::Theme::themes_dir().display());
             println!(
                 "Available themes: {}",
                 ui::theme::Theme::available_themes().join(", ")
             );
+            println!("  (place custom .toml files in the themes dir to add more)");
         }
     }
 

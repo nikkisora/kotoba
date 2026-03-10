@@ -163,7 +163,7 @@ impl AppConfig {
             .unwrap_or_else(|| Self::default_data_dir().join("JMdict_e.xml"))
     }
 
-    /// Ensure the data directory exists (creates it if needed).
+    /// Ensure the data directory and themes sub-directory exist (creates them if needed).
     pub fn ensure_data_dir(&self) -> Result<()> {
         let db_dir = self.db_path().parent().map(|p| p.to_path_buf());
         if let Some(dir) = db_dir {
@@ -171,6 +171,11 @@ impl AppConfig {
                 std::fs::create_dir_all(&dir).with_context(|| {
                     format!("Failed to create data directory: {}", dir.display())
                 })?;
+            }
+            // Also create the themes sub-directory
+            let themes_dir = dir.join("themes");
+            if !themes_dir.exists() {
+                let _ = std::fs::create_dir_all(&themes_dir);
             }
         }
         Ok(())

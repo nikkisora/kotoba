@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -193,7 +193,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 "review" => t.success,
                 "relearning" => t.error,
                 "retired" => t.muted,
-                _ => Color::White,
+                _ => t.fg,
             };
 
             items.push(ListItem::new(Line::from(vec![

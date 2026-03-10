@@ -231,7 +231,7 @@ pub fn render_popup(frame: &mut Frame, app: &App, popup: &PopupState) {
                 for (i, sentence) in sentences.iter().enumerate() {
                     lines.push(Line::from(Span::styled(
                         format!("  {}. {}", i + 1, sentence),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(t.fg),
                     )));
                 }
                 lines.push(Line::from(""));

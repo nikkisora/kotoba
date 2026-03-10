@@ -1,5 +1,5 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
@@ -112,7 +112,7 @@ fn render_pre_session(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Th
         )),
         Line::from(Span::styled(
             format!("  {} cards loaded for this session", state.queue.len()),
-            Style::default().fg(Color::White),
+            Style::default().fg(t.fg),
         )),
         Line::from(""),
         Line::from(""),
@@ -150,9 +150,7 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect, t: &The
                 Line::from(""),
                 Line::from(Span::styled(
                     &card_data.display_surface,
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
                 ))
                 .alignment(Alignment::Center),
                 Line::from(""),
@@ -196,9 +194,7 @@ fn render_card_front(frame: &mut Frame, state: &ReviewState, area: Rect, t: &The
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("  {}", card_data.sentence_text),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
@@ -241,9 +237,7 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Them
                 Line::from(vec![
                     Span::styled(
                         &card_data.display_surface,
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(" "),
                     Span::styled(
@@ -309,9 +303,7 @@ fn render_card_back(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Them
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("  {}", card_data.sentence_text),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(vec![
@@ -353,9 +345,7 @@ fn render_typing(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Theme) 
         Line::from(""),
         Line::from(Span::styled(
             &card_data.display_surface,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
         ))
         .alignment(Alignment::Center),
         Line::from(""),
@@ -373,7 +363,7 @@ fn render_typing(frame: &mut Frame, state: &ReviewState, area: Rect, t: &Theme) 
                     .fg(t.accent)
                     .add_modifier(Modifier::UNDERLINED),
             ),
-            Span::styled("_", Style::default().fg(Color::White)),
+            Span::styled("_", Style::default().fg(t.fg)),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -424,9 +414,7 @@ fn render_typed_result(frame: &mut Frame, state: &ReviewState, area: Rect, t: &T
         Line::from(""),
         Line::from(Span::styled(
             &card_data.display_surface,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
         ))
         .alignment(Alignment::Center),
         Line::from(""),
@@ -579,7 +567,7 @@ fn render_sentence_context(
                 &token.surface,
                 Style::default()
                     .bg(t.info)
-                    .fg(Color::White)
+                    .fg(t.fg)
                     .add_modifier(Modifier::BOLD),
             ));
         } else {
