@@ -549,12 +549,29 @@ fn render_coverage_panel(frame: &mut Frame, area: Rect, app: &App, focus: StatsF
             let filled = filled.min(bar_width);
             let bar = format!("{}{}", "█".repeat(filled), "░".repeat(bar_width - filled));
 
-            // Truncate title to fit
+            // Truncate title to fit (char-aware to avoid slicing inside multi-byte chars)
             let max_title = (area.width as usize).saturating_sub(30);
-            let title = if cov.title.len() > max_title {
-                format!("{}…", &cov.title[..max_title.saturating_sub(1)])
-            } else {
-                cov.title.clone()
+            let title: String = {
+                let mut width = 0;
+                let mut result = String::new();
+                let limit = max_title.saturating_sub(1); // leave room for '…'
+                for ch in cov.title.chars() {
+                    let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if width + w > limit {
+                        result.push('…');
+                        break;
+                    }
+                    result.push(ch);
+                    width += w;
+                }
+                if width <= limit && result.len() == cov.title.len() {
+                    result // no truncation needed
+                } else if !result.ends_with('…') {
+                    result.push('…');
+                    result
+                } else {
+                    result
+                }
             };
 
             ListItem::new(Line::from(vec![
